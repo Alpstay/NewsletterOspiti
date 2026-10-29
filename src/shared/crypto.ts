@@ -47,3 +47,27 @@ export async function decryptJson<T>(enc: EncBlock, password: string, aad: strin
 
 /** Dati aggiuntivi autenticati: legano il blocco cifrato a questa app e al giorno scritto in chiaro. */
 export const aadFor = (day: string): string => `newsletter-ospiti|${day}`;
+
+// ───────────── doppio controllo ─────────────
+// Per aprire ospiti.json servono DUE segreti: la password (che la persona ricorda) e la chiave del computer
+// (lunga e casuale, salvata una volta sola sul computer autorizzato). La sola password, anche se rubata o
+// indovinata, non basta: chi scarica il file pubblico senza la chiave non può decifrarlo.
+
+const BASE32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/** Chiave del computer: «NLK-» + 25 caratteri casuali (circa 125 bit), a gruppi di 5. */
+export function nuovaChiave(): string {
+  const r = (globalThis as { crypto: Crypto }).crypto.getRandomValues(new Uint8Array(25));
+  const s = Array.from(r, (b) => BASE32[b % 32]).join("");
+  return `NLK-${s.match(/.{5}/g)!.join("-")}`;
+}
+
+/** Chiave come la si digita (minuscole, spazi, trattini mancanti) → forma canonica; null se non valida. */
+export function normalizzaChiave(raw: string): string | null {
+  const s = raw.toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^NLK/, "");
+  if (s.length !== 25 || [...s].some((c) => !BASE32.includes(c))) return null;
+  return `NLK-${s.match(/.{5}/g)!.join("-")}`;
+}
+
+/** Il segreto da cui si deriva la chiave AES: password e chiave del computer insieme. */
+export const segreto = (password: string, chiave: string): string => `${password}\u0000${normalizzaChiave(chiave) ?? chiave}`;

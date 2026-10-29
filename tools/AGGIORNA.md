@@ -2,7 +2,8 @@
 
 Procedura per l'attività pianificata che ogni notte riscrive `ospiti.json`: lo **storico cifrato**
 degli ospiti con email che la pagina https://alpstay.github.io/NewsletterOspiti/ mostra ad Adriela.
-La **password** NON è in questo repository (è pubblico): viene data nel testo dell'attività pianificata.
+Il file si apre solo con **due segreti**: la **password** e la **chiave del computer** (`NLK-…`). Nessuno dei due è
+in questo repository (è pubblico): li dà il testo dell'attività pianificata.
 
 ## Perché uno storico
 
@@ -13,7 +14,7 @@ con lo storico già cifrato in `ospiti.json`:
 - prima della finestra vale lo storico;
 - dopo 24 mesi dall'ultima partenza un soggiorno si cancella comunque.
 
-Per questo `start` controlla subito che la password apra lo storico: con una password sbagliata lo
+Per questo `start` controlla subito che password e chiave aprano lo storico: con credenziali sbagliate lo
 storico andrebbe perso, e il programma si ferma.
 
 ## Regole
@@ -32,7 +33,7 @@ storico andrebbe perso, e il programma si ferma.
 
 ## Passi
 
-1. Dalla cartella del repository: `node tools/ospiti.mjs start "<PASSWORD>"`
+1. Dalla cartella del repository: `node tools/ospiti.mjs start "<PASSWORD>" "<CHIAVE>"`
    (solo la primissima volta, senza `ospiti.json`, si aggiunge `--primo`: non va mai usato altrimenti).
 2. `node tools/ospiti.mjs next` e fai quello che dice:
    - `CHIAMA mcp__La_Scatola__query_curated_view {argomenti}`: esegui quella chiamata con quegli
@@ -47,31 +48,45 @@ storico andrebbe perso, e il programma si ferma.
      circa 40 chiamate (~16 pagine di `curated_guest_stays`, ~26 di `curated_reservations`). È la rete di
      sicurezza per le correzioni tardive fatte in Slope.
    Il server restituisce al massimo ~65 KB per pagina: è normale.
-3. Controllo: `node tools/ospiti.mjs verify "<PASSWORD>"` deve rispondere `verifica OK`.
+3. Controllo: `node tools/ospiti.mjs verify "<PASSWORD>" "<CHIAVE>"` deve rispondere `verifica OK`.
 4. Pubblica: `git add ospiti.json`, commit `Ospiti newsletter <AAAA-MM-GG>`, `git push origin HEAD:main`.
    Se il push è rifiutato perché il repository è cambiato: copia `ospiti.json` fuori dal repository,
    `git fetch origin main`, `git reset --hard origin/main`, rimetti il file, di nuovo add, commit e push.
    Una volta sola. Con errore 403 non insistere: scrivilo nel riepilogo.
 5. Riepilogo breve in italiano con le righe `RIEPILOGO` (solo conteggi, nessun dato personale).
 
-## Importare lo storico da un'esportazione di Slope
+## Importare il pacchetto clienti da Slope (tre file Excel)
 
-La Scatola non ha gli ospiti degli anni passati. Per far riconoscere subito gli abituali si può aggiungere
-allo storico un'esportazione di Slope (Excel .xlsx o CSV) con almeno le colonne email e data di arrivo:
+La Scatola non ha gli ospiti degli anni passati. Il pacchetto clienti esportato da Slope, **un file per casa**
+(.xlsx o .csv), si aggiunge allo storico in due modi:
 
-```
-node tools/ospiti.mjs importa esportazione.xlsx "<PASSWORD>"            # con una colonna Struttura/Hotel
-node tools/ospiti.mjs importa esportazione.xlsx "<PASSWORD>" --casa saslong   # esportazione di una sola casa
-```
+- **Dalla pagina** (chi ha password e chiave): sezione «Aggiorna il pacchetto clienti da Excel», si scelgono i tre
+  file, la pagina li legge sul computer (non li invia a nessuno), mostra l'esito e prepara un `ospiti.json`
+  aggiornato da caricare su GitHub con «Add file → Upload files».
+- **Da qui**:
+  ```
+  node tools/ospiti.mjs importa "<PASSWORD>" "<CHIAVE>" --hartmann hartmann.xlsx --acadia acadia.xlsx --saslong saslong.xlsx
+  ```
+  (anche solo uno o due file; oppure `--file tutto.xlsx` se c'è una colonna «Struttura»). Poi commit
+  `Importazione pacchetto clienti <AAAA-MM-GG>` con il solo `ospiti.json`.
 
-- Le colonne si riconoscono dal nome (Nome, Cognome, Email, Lingua, Cittadinanza/Nazionalità, Arrivo,
-  Partenza, Struttura, Data di nascita; anche in inglese o tedesco), in qualunque ordine.
-- Si importano solo i soggiorni **prima** della finestra di La Scatola (da lì in poi valgono i dati
-  aggiornati ogni notte) e non più vecchi di 24 mesi; stesse esclusioni (portali, minori, …).
-- I soggiorni importati hanno un identificativo generato `imp-…` (non è un ID di Slope) e non vengono
-  mai tolti dall'aggiornamento notturno. Reimportare lo stesso file non crea doppioni.
-- Il file esportato contiene dati personali: si usa nella sessione e **non si aggiunge al repository**.
-  Si pubblica solo `ospiti.json` (commit `Importazione storico <AAAA-MM-GG>`).
+Regole:
+- Le colonne si riconoscono dal nome (Email; Arrivo o Ultimo soggiorno; e se ci sono Nome, Cognome, Lingua,
+  Cittadinanza/Nazionalità, Partenza, Data di nascita, Soggiorni), anche in inglese o tedesco, in qualunque ordine.
+- Una riga che corrisponde a un soggiorno già letto da La Scatola (stesso ospite, stessa casa, date che si toccano)
+  non si importa: vale il dato di La Scatola. Le altre si aggiungono, anche se recenti.
+- La colonna «Soggiorni» (numero di visite) rende abituale chi ne ha almeno 2.
+- Stesse esclusioni (portali, minori, indirizzi non validi) e niente oltre 24 mesi dall'ultima partenza.
+- I soggiorni importati hanno un identificativo generato `imp-…` (mai un ID di Slope) e non vengono tolti
+  dall'aggiornamento notturno. Reimportare gli stessi file non crea doppioni.
+- I file esportati contengono dati personali: **non si aggiungono mai al repository** (`.gitignore` li esclude).
+
+## Credenziali (doppio controllo)
+
+- `node tools/ospiti.mjs chiave` genera una chiave del computer nuova.
+- `node tools/ospiti.mjs cambia "<PASSWORD>" "<CHIAVE>" "<NUOVA PASSWORD>" "<NUOVA CHIAVE>"` ricifra lo storico.
+  Subito dopo va aggiornato il testo dell'attività pianificata, e le nuove credenziali si consegnano di persona.
+- Cambiarle quando una persona con accesso lascia l'azienda, e comunque ogni 6 mesi.
 
 ## Modifiche al codice
 

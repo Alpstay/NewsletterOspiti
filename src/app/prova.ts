@@ -71,5 +71,5 @@ const archivio: Archivio = {
   esclusi: { portale: 37, nonValida: 2, interna: 1, minori: 4, cancellati: 6 },
 };
 document.getElementById("stato")!.textContent = "Anteprima con ospiti inventati";
-mostra(archivio, { generated_at: new Date().toISOString(), scatola_updated_at: null, freshness: "fresh", day: oggi }, oggi);
+mostra(archivio, { generated_at: new Date().toISOString(), scatola_updated_at: null, freshness: "fresh", day: oggi }, oggi, { segreto: "anteprima-senza-dati-reali" });
 document.getElementById("stato")!.textContent = "ANTEPRIMA con 140 ospiti inventati, nessun dato reale. Qui il pulsante Excel non scarica: funziona nella pagina pubblicata.";

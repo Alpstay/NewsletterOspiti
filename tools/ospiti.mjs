@@ -1,7 +1,7 @@
 // Generato da src/cli/ospiti-cli.ts con build.mjs: non modificare a mano.
 
 // src/cli/ospiti-cli.ts
-import { existsSync as existsSync2, readFileSync as readFileSync3, writeFileSync } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join2 } from "node:path";
 
@@ -41,6 +41,18 @@ async function decryptJson(enc, password, aad) {
   return JSON.parse(new TextDecoder().decode(pt));
 }
 var aadFor = (day2) => `newsletter-ospiti|${day2}`;
+var BASE32 = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function nuovaChiave() {
+  const r = globalThis.crypto.getRandomValues(new Uint8Array(25));
+  const s = Array.from(r, (b) => BASE32[b % 32]).join("");
+  return `NLK-${s.match(/.{5}/g).join("-")}`;
+}
+function normalizzaChiave(raw) {
+  const s = raw.toUpperCase().replace(/[^A-Z0-9]/g, "").replace(/^NLK/, "");
+  if (s.length !== 25 || [...s].some((c) => !BASE32.includes(c))) return null;
+  return `NLK-${s.match(/.{5}/g).join("-")}`;
+}
+var segreto = (password, chiave) => `${password}\0${normalizzaChiave(chiave) ?? chiave}`;
 
 // src/shared/model.ts
 var APP = "newsletter-ospiti";
@@ -254,7 +266,7 @@ function ospitiDa(soggiorni, oggi) {
     const caseSet = new Set(list.map((s) => casaDa(s.pid)).filter((k) => k !== null));
     const passati = list.filter((s) => s.dal <= oggi);
     const futuri = list.filter((s) => s.dal > oggi);
-    const viaggi = contaViaggi(list);
+    const viaggi = Math.max(contaViaggi(list), ...list.map((s) => s.soggiorniDichiarati ?? 1));
     const primo = list[0].dal;
     const privacy = list.map((s) => s.privacyDal).filter((d) => !!d).sort()[0] ?? null;
     const prenotata = list.map((s) => s.prenotataIl).filter((d) => !!d).sort()[0] ?? null;
@@ -286,7 +298,7 @@ function isEnvelope(v) {
   if (typeof v !== "object" || v === null) return false;
   const e = v;
   const enc = e.enc;
-  return e.format === 1 && e.app === APP && typeof e.day === "string" && typeof e.generated_at === "string" && !!enc && typeof enc.ct === "string" && typeof enc.iter === "number";
+  return (e.format === 1 || e.format === 2) && e.app === APP && typeof e.day === "string" && typeof e.generated_at === "string" && !!enc && typeof enc.ct === "string" && typeof enc.iter === "number";
 }
 function envelopeSenzaDatiInChiaro(e) {
   const { enc: _enc, ...chiaro } = e;
@@ -300,13 +312,31 @@ var SINONIMI = {
   cognome: ["cognome", "last name", "lastname", "surname", "nachname", "cognome ospite"],
   nominativo: ["nominativo", "cliente", "ospite", "intestatario", "nome completo", "full name", "guest", "name"],
   lingua: ["lingua", "language", "sprache", "lingua ospite"],
-  nazione: ["cittadinanza", "nazionalita", "nazionalit\xE0", "nazione", "paese", "country", "citizenship", "nationality", "staatsangehorigkeit", "land"],
-  arrivo: ["arrivo", "data arrivo", "check-in", "check in", "checkin", "dal", "arrival", "anreise", "inizio soggiorno"],
+  nazione: ["cittadinanza", "nazionalita", "nazione", "paese", "country", "citizenship", "nationality", "staatsangehorigkeit", "land"],
+  arrivo: [
+    "arrivo",
+    "data arrivo",
+    "check-in",
+    "check in",
+    "checkin",
+    "dal",
+    "arrival",
+    "anreise",
+    "inizio soggiorno",
+    "ultimo soggiorno",
+    "data ultimo soggiorno",
+    "ultimo arrivo",
+    "ultima visita",
+    "last stay",
+    "last arrival",
+    "letzter aufenthalt"
+  ],
   partenza: ["partenza", "data partenza", "check-out", "check out", "checkout", "al", "departure", "abreise", "fine soggiorno"],
-  casa: ["struttura", "hotel", "casa", "property", "proprieta", "propriet\xE0", "esercizio"],
-  nascita: ["data di nascita", "nascita", "birth date", "birthdate", "data nascita", "geburtsdatum"]
+  casa: ["struttura", "hotel", "casa", "property", "proprieta", "esercizio"],
+  nascita: ["data di nascita", "nascita", "birth date", "birthdate", "data nascita", "geburtsdatum"],
+  soggiorni: ["soggiorni", "numero soggiorni", "n soggiorni", "n soggiorno", "visite", "numero visite", "stays", "number of stays", "aufenthalte", "anzahl aufenthalte"]
 };
-var norm = (s) => s.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase().replace(/[_.:]+/g, " ").replace(/\s+/g, " ").trim();
+var norm = (s) => s.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase().replace(/[_.:°]+/g, " ").replace(/\s+/g, " ").trim();
 function mappaColonne(righe) {
   for (let r = 0; r < Math.min(10, righe.length); r++) {
     const intest = righe[r].map(norm);
@@ -383,17 +413,28 @@ async function sha16(testo) {
   const h = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(testo));
   return [...new Uint8Array(h)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-async function importaRighe(righe, oggi, finoAl, casaPredefinita) {
+async function importaRighe(righe, oggi, esistenti, casaPredefinita) {
   const mappa = mappaColonne(righe);
-  if (!mappa) throw new Error("intestazione non riconosciuta: servono almeno una colonna email e una colonna arrivo (es. \xABEmail\xBB, \xABArrivo\xBB)");
+  if (!mappa)
+    throw new Error("intestazione non riconosciuta: servono almeno una colonna \xABEmail\xBB e una colonna con la data (es. \xABArrivo\xBB o \xABUltimo soggiorno\xBB)");
   const c = mappa.colonne;
   const cella = (r, k) => c[k] !== void 0 ? r[c[k]] ?? "" : "";
   const esclusi = { portale: 0, nonValida: 0, interna: 0, minori: 0, cancellati: 0 };
   let illeggibili = 0;
-  let giaInScatola = 0;
+  let giaPresenti = 0;
+  let troppoVecchie = 0;
+  const daScatola = /* @__PURE__ */ new Map();
+  for (const s of esistenti)
+    if (s.origine !== "import") {
+      const k = `${s.email}|${s.pid}`;
+      const l = daScatola.get(k);
+      if (l) l.push(s);
+      else daScatola.set(k, [s]);
+    }
   const out2 = /* @__PURE__ */ new Map();
   const limite = addMonths(oggi, -24);
-  for (const r of righe.slice(mappa.riga + 1)) {
+  const dati = righe.slice(mappa.riga + 1).filter((r) => r.some((x) => x !== ""));
+  for (const r of dati) {
     const grezza = cella(r, "email");
     if (!grezza) {
       esclusi.nonValida++;
@@ -411,10 +452,10 @@ async function importaRighe(righe, oggi, finoAl, casaPredefinita) {
       illeggibili++;
       continue;
     }
-    const al = dataDa(cella(r, "partenza")) ?? dal;
-    if (al < limite) continue;
-    if (finoAl && dal >= finoAl) {
-      giaInScatola++;
+    const alLetto = dataDa(cella(r, "partenza"));
+    const al = alLetto && alLetto >= dal ? alLetto : dal;
+    if (al < limite) {
+      troppoVecchie++;
       continue;
     }
     const nascita = dataDa(cella(r, "nascita"));
@@ -423,9 +464,14 @@ async function importaRighe(righe, oggi, finoAl, casaPredefinita) {
       esclusi.minori++;
       continue;
     }
+    if ((daScatola.get(`${email}|${pid}`) ?? []).some((s) => s.dal <= addDays(al, 1) && s.al >= addDays(dal, -1))) {
+      giaPresenti++;
+      continue;
+    }
     let nome = capitalizza(cella(r, "nome"));
     const cognome = capitalizza(cella(r, "cognome"));
     if (!nome && !cognome) nome = capitalizza(cella(r, "nominativo"));
+    const n = Number.parseInt(cella(r, "soggiorni"), 10);
     const gsid = `imp-${await sha16(`${email}|${pid}|${dal}`)}`;
     out2.set(gsid, {
       gsid,
@@ -437,66 +483,84 @@ async function importaRighe(righe, oggi, finoAl, casaPredefinita) {
       linguaSlope: linguaDa(cella(r, "lingua")),
       nazione: nazioneDa(cella(r, "nazione")),
       dal,
-      al: al >= dal ? al : dal,
+      al,
       privacyDal: null,
       prenotataIl: null,
       canale: null,
       maggiorenneDal,
       vistoIl: oggi,
-      origine: "import"
+      origine: "import",
+      ...Number.isFinite(n) && n > 1 ? { soggiorniDichiarati: Math.min(n, 999) } : {}
     });
   }
-  return { soggiorni: [...out2.values()], esclusi, illeggibili, giaInScatola, colonne: c };
+  return { soggiorni: [...out2.values()], righe: dati.length, esclusi, illeggibili, giaPresenti, troppoVecchie, colonne: c };
+}
+async function importaPacchetto(file, oggi, esistenti) {
+  const soggiorni = [];
+  const esiti = [];
+  for (const f of file) {
+    const esito = await importaRighe(f.righe, oggi, esistenti, f.casa);
+    if (esito.colonne.casa === void 0 && !f.casa) throw new Error(`${f.nome}: manca la colonna \xABStruttura\xBB e non \xE8 indicata la casa`);
+    soggiorni.push(...esito.soggiorni);
+    esiti.push({ nome: f.nome, esito });
+  }
+  return { soggiorni, esiti };
+}
+function riassuntoEsito(nome, e) {
+  const x = e.esclusi;
+  return `${nome}: ${e.righe} righe \u2192 ${e.soggiorni.length} importate \xB7 scartate ${x.portale} email dei portali, ${x.nonValida} senza email valida, ${x.interna} interne, ${x.minori} minori, ${e.illeggibili} senza data o casa, ${e.troppoVecchie} oltre 24 mesi \xB7 ${e.giaPresenti} gi\xE0 presenti da La Scatola`;
 }
 
-// src/cli/tabella.ts
-import { readFileSync } from "node:fs";
-import { inflateRawSync } from "node:zlib";
-function voci(buf) {
+// src/shared/tabella.ts
+var u16 = (b, p) => b[p] | b[p + 1] << 8;
+var u32 = (b, p) => (b[p] | b[p + 1] << 8 | b[p + 2] << 16 | b[p + 3] << 24) >>> 0;
+var utf8 = new TextDecoder("utf-8");
+async function voci(buf, inflate) {
   let eocd = -1;
   for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--)
-    if (buf.readUInt32LE(i) === 101010256) {
+    if (u32(buf, i) === 101010256) {
       eocd = i;
       break;
     }
-  if (eocd < 0) throw new Error("il file non \xE8 un .xlsx valido (archivio ZIP non riconosciuto)");
-  const n = buf.readUInt16LE(eocd + 10);
-  let p = buf.readUInt32LE(eocd + 16);
+  if (eocd < 0) throw new Error("il file non \xE8 un .xlsx valido");
+  const n = u16(buf, eocd + 10);
+  let p = u32(buf, eocd + 16);
   const out2 = /* @__PURE__ */ new Map();
   for (let i = 0; i < n; i++) {
-    if (buf.readUInt32LE(p) !== 33639248) throw new Error("indice ZIP danneggiato");
-    const metodo = buf.readUInt16LE(p + 10);
-    const compresso = buf.readUInt32LE(p + 20);
-    const lNome = buf.readUInt16LE(p + 28);
-    const lExtra = buf.readUInt16LE(p + 30);
-    const lComm = buf.readUInt16LE(p + 32);
-    const locale = buf.readUInt32LE(p + 42);
-    const nome = buf.toString("utf8", p + 46, p + 46 + lNome);
-    const inizio = locale + 30 + buf.readUInt16LE(locale + 26) + buf.readUInt16LE(locale + 28);
-    const dati = buf.subarray(inizio, inizio + compresso);
-    out2.set(nome, metodo === 0 ? dati : metodo === 8 ? inflateRawSync(dati) : Buffer.alloc(0));
+    if (u32(buf, p) !== 33639248) throw new Error("file .xlsx danneggiato");
+    const metodo = u16(buf, p + 10);
+    const compresso = u32(buf, p + 20);
+    const lNome = u16(buf, p + 28);
+    const lExtra = u16(buf, p + 30);
+    const lComm = u16(buf, p + 32);
+    const locale = u32(buf, p + 42);
+    const nome = utf8.decode(buf.subarray(p + 46, p + 46 + lNome));
     p += 46 + lNome + lExtra + lComm;
+    if (!/^xl\/(workbook\.xml|sharedStrings\.xml|_rels\/workbook\.xml\.rels|worksheets\/[^/]+\.xml)$/.test(nome)) continue;
+    const inizio = locale + 30 + u16(buf, locale + 26) + u16(buf, locale + 28);
+    const dati = buf.subarray(inizio, inizio + compresso);
+    if (metodo !== 0 && metodo !== 8) throw new Error(`compressione non supportata nel file .xlsx (${metodo})`);
+    out2.set(nome, utf8.decode(metodo === 0 ? dati : await inflate(dati)));
   }
   return out2;
 }
 var unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#x([0-9a-f]+);/gi, (_m, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(Number(d))).replace(/&amp;/g, "&");
 var testi = (xml) => [...xml.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map((m) => unescape(m[1])).join("");
 function colonna(ref) {
-  const lettere = /^[A-Z]+/.exec(ref)?.[0] ?? "A";
   let n = 0;
-  for (const c of lettere) n = n * 26 + (c.charCodeAt(0) - 64);
+  for (const c of /^[A-Z]+/.exec(ref)?.[0] ?? "A") n = n * 26 + (c.charCodeAt(0) - 64);
   return n - 1;
 }
-function leggiXlsx(buf) {
-  const z = voci(buf);
-  const shared = z.get("xl/sharedStrings.xml")?.toString("utf8") ?? "";
-  const stringhe = [...shared.matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => testi(m[1]));
-  const wb = z.get("xl/workbook.xml")?.toString("utf8") ?? "";
-  const rels = z.get("xl/_rels/workbook.xml.rels")?.toString("utf8") ?? "";
+async function leggiXlsx(buf, inflate) {
+  const z = await voci(buf, inflate);
+  const stringhe = [...(z.get("xl/sharedStrings.xml") ?? "").matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => testi(m[1]));
+  const wb = z.get("xl/workbook.xml") ?? "";
+  const rels = z.get("xl/_rels/workbook.xml.rels") ?? "";
   const rid = /<sheet\b[^>]*\br:id="([^"]+)"/.exec(wb)?.[1];
-  const target = rid ? new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] ?? new RegExp(`Target="([^"]+)"[^>]*Id="${rid}"`).exec(rels)?.[1] : void 0;
+  const rel = rid ? [...rels.matchAll(/<Relationship\b[^>]*>/g)].map((m) => m[0]).find((r) => r.includes(`Id="${rid}"`)) : void 0;
+  const target = rel ? /Target="([^"]+)"/.exec(rel)?.[1] : void 0;
   const percorso = target ? target.startsWith("/") ? target.slice(1) : `xl/${target.replace(/^\.\//, "")}` : "xl/worksheets/sheet1.xml";
-  const foglio = (z.get(percorso) ?? z.get("xl/worksheets/sheet1.xml"))?.toString("utf8");
+  const foglio = z.get(percorso) ?? z.get("xl/worksheets/sheet1.xml");
   if (!foglio) throw new Error("primo foglio non trovato nel file .xlsx");
   const righe = [];
   for (const r of foglio.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
@@ -551,15 +615,17 @@ function leggiCsv(testo) {
   }
   return righe.filter((r) => r.some((c) => c !== ""));
 }
-function leggiTabella(percorso) {
-  const buf = readFileSync(percorso);
-  if (/\.xlsx$/i.test(percorso) || buf[0] === 80 && buf[1] === 75) return leggiXlsx(buf);
-  if (/\.xls$/i.test(percorso)) throw new Error("il vecchio formato .xls non \xE8 supportato: salva il file come .xlsx o .csv");
-  return leggiCsv(buf.toString("utf8"));
+async function leggiTabella(nome, buf, inflate) {
+  if (/\.xls$/i.test(nome)) throw new Error(`${nome}: il vecchio formato .xls non \xE8 supportato, salva il file come .xlsx`);
+  if (/\.xlsx$/i.test(nome) || buf[0] === 80 && buf[1] === 75) return leggiXlsx(buf, inflate);
+  return leggiCsv(utf8.decode(buf));
 }
 
+// src/cli/ospiti-cli.ts
+import { inflateRawSync } from "node:zlib";
+
 // src/cli/transcript.ts
-import { existsSync, readFileSync as readFileSync2, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 var isRec = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -603,7 +669,7 @@ function transcripts() {
 function findTranscript(token) {
   for (const t of transcripts()) {
     try {
-      if (readFileSync2(t.path, "utf8").includes(token)) return t.path;
+      if (readFileSync(t.path, "utf8").includes(token)) return t.path;
     } catch {
     }
   }
@@ -641,7 +707,7 @@ function parseResult(body, isError) {
   const saved = SAVED_PATH.exec(raw);
   if (saved) {
     if (!existsSync(saved[1])) return { page: null, error: `file della risposta non trovato (${basename(saved[1])})` };
-    const page2 = asPage(readFileSync2(saved[1], "utf8"));
+    const page2 = asPage(readFileSync(saved[1], "utf8"));
     return page2 ? { page: page2, error: null } : { page: null, error: `file della risposta illeggibile (${basename(saved[1])})` };
   }
   if (isError) return { page: null, error: raw.replace(/\s+/g, " ").slice(0, 160) || "errore dello strumento" };
@@ -651,7 +717,7 @@ function parseResult(body, isError) {
 }
 function readCalls(transcript, since) {
   const byId = /* @__PURE__ */ new Map();
-  for (const line of readFileSync2(transcript, "utf8").split("\n")) {
+  for (const line of readFileSync(transcript, "utf8").split("\n")) {
     if (!line || !line.includes("Scatola") && !line.includes("tool_result")) continue;
     let o;
     try {
@@ -729,12 +795,34 @@ var reservationArgs = (dal) => ({
   order_by: [{ field: "arrival", direction: "asc" }],
   limit: 500
 });
-async function leggiStorico(password) {
+function argomenti(args, conValore) {
+  const pos = [];
+  const opt = /* @__PURE__ */ new Map();
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a.startsWith("--")) {
+      const k = a.slice(2);
+      if (conValore.includes(k)) opt.set(k, args[++i] ?? "");
+      else opt.set(k, true);
+    } else pos.push(a);
+  }
+  return { pos, opt };
+}
+function credenziali(pos, uso) {
+  const [password, chiaveGrezza] = pos;
+  if (!password || password.length < 12 || !chiaveGrezza) fail(`servono password e chiave: ${CMD} ${uso}`);
+  const chiave = normalizzaChiave(chiaveGrezza);
+  if (!chiave) fail("la chiave del computer non \xE8 valida (forma NLK-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX).");
+  return { password, chiave };
+}
+var segretoPer = (env, password, chiave) => env.format === 2 ? segreto(password, chiave ?? "") : password;
+async function leggiStorico(sgr, password) {
   if (!existsSync2(FILE)) return null;
-  const env = JSON.parse(readFileSync3(FILE, "utf8"));
+  const env = JSON.parse(readFileSync2(FILE, "utf8"));
   if (!isEnvelope(env)) fail(`${FILE} non \xE8 un file della piattaforma newsletter: non procedere.`);
-  const archivio = await decryptJson(env.enc, password, aadFor(env.day)).catch(
-    () => fail(`la password non apre ${FILE}: \xE8 sbagliata o il file \xE8 alterato. Non procedere, lo storico andrebbe perso.`)
+  const s = env.format === 1 && password ? password : sgr;
+  const archivio = await decryptJson(env.enc, s, aadFor(env.day)).catch(
+    () => fail(`password o chiave non aprono ${FILE}: sono sbagliate o il file \xE8 alterato. Non procedere, lo storico andrebbe perso.`)
   );
   return { env, archivio };
 }
@@ -751,17 +839,17 @@ function freschezza(list) {
   }
   return { status, updatedAt };
 }
-async function scrivi(archivio, password, fresh) {
+async function scrivi(archivio, sgr, fresh) {
   const envelope = {
-    format: 1,
+    format: 2,
     app: APP,
     generated_at: (/* @__PURE__ */ new Date()).toISOString(),
     scatola_updated_at: fresh.updatedAt,
     freshness: fresh.status,
     day: archivio.day,
-    enc: await encryptJson(archivio, password, aadFor(archivio.day))
+    enc: await encryptJson(archivio, sgr, aadFor(archivio.day))
   };
-  const back = await decryptJson(envelope.enc, password, aadFor(archivio.day));
+  const back = await decryptJson(envelope.enc, sgr, aadFor(archivio.day));
   if (JSON.stringify(back) !== JSON.stringify(archivio)) fail("la verifica della cifratura non torna. Non pubblicare.");
   if (!envelopeSenzaDatiInChiaro(envelope)) fail("dati personali fuori dal blocco cifrato. Non pubblicare.");
   writeFileSync(FILE, `${JSON.stringify(envelope)}
@@ -779,27 +867,28 @@ function riepilogoOspiti(soggiorni, day2) {
 }
 var riepilogoStorico = (u, importati = 0) => `RIEPILOGO storico: ${u.soggiorni.length} soggiorni (${u.nuovi} nuovi, ${u.aggiornati} aggiornati, ${u.spariti} tolti perch\xE9 spariti da Slope, ${u.scaduti} oltre ${CONSERVAZIONE_MESI} mesi${importati ? `, ${importati} importati in tutto` : ""})`;
 function loadRun() {
-  if (!existsSync2(RUN_FILE)) fail(`nessuna esecuzione avviata: esegui prima ${CMD} start "<PASSWORD>".`);
-  return JSON.parse(readFileSync3(RUN_FILE, "utf8"));
+  if (!existsSync2(RUN_FILE)) fail(`nessuna esecuzione avviata: esegui prima ${CMD} start "<PASSWORD>" "<CHIAVE>".`);
+  return JSON.parse(readFileSync2(RUN_FILE, "utf8"));
 }
 async function start(args) {
-  const password = args.find((a) => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--transcript");
-  if (!password || password.length < 12) fail(`serve la password: ${CMD} start "<PASSWORD>"`);
+  const { pos, opt } = argomenti(args, ["transcript"]);
+  const { password, chiave } = credenziali(pos, 'start "<PASSWORD>" "<CHIAVE>"');
+  const sgr = segreto(password, chiave);
   if (!existsSync2("tools/ospiti.mjs")) fail("esegui il comando dalla cartella del repository NewsletterOspiti.");
-  const primo = args.includes("--primo");
-  const storico = await leggiStorico(password);
+  const primo = opt.has("primo");
+  const storico = await leggiStorico(sgr, password);
   if (!storico && !primo) fail(`${FILE} non c'\xE8: senza storico gli abituali si perdono. Se \xE8 davvero il primo aggiornamento usa --primo.`);
   const day2 = romeDay();
-  const completo = args.includes("--completo") || !storico || day2.endsWith("-01");
-  const ti = args.indexOf("--transcript");
+  const completo = opt.has("completo") || !storico || day2.endsWith("-01");
+  const tr = opt.get("transcript");
   const run = {
     token: `NL-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
     startedAt: new Date(Date.now() - 1e3).toISOString(),
-    password,
+    segreto: sgr,
     day: day2,
     primo,
     completo,
-    transcript: ti >= 0 ? args[ti + 1] ?? null : null
+    transcript: typeof tr === "string" && tr ? tr : null
   };
   writeFileSync(RUN_FILE, JSON.stringify(run), { mode: 384 });
   out(`SEGNO ${run.token}`);
@@ -842,7 +931,7 @@ async function next() {
     if (!pren.has(e.ok.rid)) senzaPrenotazione++;
     letti.set(e.ok.gsid, e.ok);
   }
-  const storico = run.primo ? null : await leggiStorico(run.password);
+  const storico = run.primo ? null : await leggiStorico(run.segreto);
   if (!storico && !run.primo) fail(`${FILE} \xE8 sparito durante l'esecuzione. Non pubblicare.`);
   const prev = storico?.archivio.soggiorni ?? [];
   const copre = run.completo ? (s) => s.dal >= primoInizio : (s) => s.al >= daIncr;
@@ -857,7 +946,7 @@ async function next() {
     soggiorni: u.soggiorni,
     esclusi: run.completo ? esclusi : storico?.archivio.esclusi ?? esclusi
   };
-  const envelope = await scrivi(archivio, run.password, freschezza([...guests.freshness, ...res.freshness]));
+  const envelope = await scrivi(archivio, run.segreto, freschezza([...guests.freshness, ...res.freshness]));
   out(`RIEPILOGO aggiornamento ${run.completo ? "completo" : "incrementale"}: ${guests.rows.length} soggiorni con email letti${run.completo ? ` dal ${primoInizio}` : ` (fine soggiorno dal ${daIncr})`}, ${res.rows.length} prenotazioni lette`);
   out(
     `RIEPILOGO scartati: ${esclusi.portale} email dei portali, ${esclusi.nonValida} non valide, ${esclusi.interna} interne, ${esclusi.minori} minori, ${esclusi.cancellati} prenotazioni cancellate o in opzione`
@@ -869,39 +958,59 @@ async function next() {
   out(`PRONTO ${FILE} scritto e verificato`);
 }
 async function importa(args) {
-  const ci = args.indexOf("--casa");
-  const casaKey = ci >= 0 ? args[ci + 1] : null;
-  const pos = args.filter((a, i) => !a.startsWith("--") && !(ci >= 0 && i === ci + 1));
-  const [file, password] = pos;
-  if (!file || !password) fail(`uso: ${CMD} importa <esportazione.xlsx|.csv> "<PASSWORD>" [--casa acadia|hartmann|saslong]`);
-  if (!existsSync2(file)) fail(`file non trovato: ${file}`);
-  const casa = casaKey ? CASE.find((c) => c.key === casaKey.toLowerCase())?.id ?? fail(`casa sconosciuta: ${casaKey} (acadia, hartmann o saslong)`) : null;
-  const storico = await leggiStorico(password);
+  const { pos, opt } = argomenti(args, ["hartmann", "acadia", "saslong", "file"]);
+  const { password, chiave } = credenziali(pos, 'importa "<PASSWORD>" "<CHIAVE>" --hartmann h.xlsx --acadia a.xlsx --saslong s.xlsx');
+  const sgr = segreto(password, chiave);
+  const richieste = [];
+  for (const c of CASE) {
+    const f = opt.get(c.key);
+    if (typeof f === "string" && f) richieste.push({ nome: f, casa: c.id });
+  }
+  const tutto = opt.get("file");
+  if (typeof tutto === "string" && tutto) richieste.push({ nome: tutto, casa: null });
+  if (!richieste.length) fail(`indica almeno un file: --hartmann, --acadia, --saslong (uno per casa) oppure --file con una colonna \xABStruttura\xBB.`);
+  for (const r of richieste) if (!existsSync2(r.nome)) fail(`file non trovato: ${r.nome}`);
+  const storico = await leggiStorico(sgr, password);
   if (!storico) fail(`${FILE} non c'\xE8: fai prima un aggiornamento da La Scatola, poi importa.`);
   const day2 = romeDay();
-  const righe = leggiTabella(file);
-  const imp = await importaRighe(righe, day2, storico.archivio.finestraDal, casa).catch((e2) => fail(e2 instanceof Error ? e2.message : String(e2)));
-  const nomiCol = Object.entries(imp.colonne).map(([k, i]) => `${k}=${String.fromCharCode(65 + i)}`).join(" ");
-  out(`RIEPILOGO colonne riconosciute: ${nomiCol}`);
-  if (imp.colonne.casa === void 0 && !casa) fail("nessuna colonna \xABStruttura/Hotel\xBB nel file: indica la casa con --casa acadia|hartmann|saslong.");
-  if (!imp.soggiorni.length) fail(`nessun soggiorno importabile (illeggibili ${imp.illeggibili}, gi\xE0 coperti da La Scatola ${imp.giaInScatola}). Niente da pubblicare.`);
-  const u = unisci(storico.archivio.soggiorni, imp.soggiorni, () => false, day2);
+  const file = [];
+  for (const r of richieste) {
+    const righe = await leggiTabella(r.nome, new Uint8Array(readFileSync2(r.nome)), async (d) => new Uint8Array(inflateRawSync(d)));
+    const m = mappaColonne(righe);
+    out(`RIEPILOGO ${r.nome}: colonne ${m ? Object.entries(m.colonne).map(([k, i]) => `${k}=${String.fromCharCode(65 + i)}`).join(" ") : "NON RICONOSCIUTE"}`);
+    file.push({ nome: r.nome, casa: r.casa, righe });
+  }
+  const pac = await importaPacchetto(file, day2, storico.archivio.soggiorni).catch((e) => fail(e instanceof Error ? e.message : String(e)));
+  for (const e of pac.esiti) out(`RIEPILOGO ${riassuntoEsito(e.nome, e.esito)}`);
+  if (!pac.soggiorni.length) fail("nessun soggiorno importabile nei file indicati. Niente da pubblicare.");
+  const u = unisci(storico.archivio.soggiorni, pac.soggiorni, () => false, day2);
   const archivio = { ...storico.archivio, day: day2, soggiorni: u.soggiorni };
-  await scrivi(archivio, password, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at });
-  const e = imp.esclusi;
-  out(`RIEPILOGO righe importate: ${imp.soggiorni.length} \xB7 scartate: ${e.portale} email dei portali, ${e.nonValida} senza email valida, ${e.interna} interne, ${e.minori} minori, ${imp.illeggibili} senza data o casa leggibile, ${imp.giaInScatola} gi\xE0 coperte da La Scatola`);
+  await scrivi(archivio, sgr, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at });
   out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
   riepilogoOspiti(u.soggiorni, day2);
   out(`PRONTO ${FILE} scritto e verificato`);
 }
+async function cambia(args) {
+  const [pw, ch, nuovaPw, nuovaCh] = args;
+  if (!pw || !ch || !nuovaPw || !nuovaCh) fail(`uso: ${CMD} cambia "<PASSWORD>" "<CHIAVE o ->" "<NUOVA PASSWORD>" "<NUOVA CHIAVE>"`);
+  if (nuovaPw.length < 12) fail("la nuova password deve avere almeno 12 caratteri.");
+  const nuova = normalizzaChiave(nuovaCh);
+  if (!nuova) fail("la nuova chiave non \xE8 valida: generane una con \xABchiave\xBB.");
+  if (!existsSync2(FILE)) fail(`${FILE} non c'\xE8.`);
+  const env = JSON.parse(readFileSync2(FILE, "utf8"));
+  if (!isEnvelope(env)) fail(`${FILE} non \xE8 un file della piattaforma newsletter.`);
+  const vecchio = segretoPer(env, pw, ch === "-" ? null : normalizzaChiave(ch));
+  const archivio = await decryptJson(env.enc, vecchio, aadFor(env.day)).catch(() => fail("password o chiave attuali errate."));
+  await scrivi(archivio, segreto(nuovaPw, nuova), { status: env.freshness, updatedAt: env.scatola_updated_at });
+  out(`PRONTO ${FILE} ricifrato con le nuove credenziali (doppio controllo). Aggiorna il testo dell'attivit\xE0 pianificata e comunica le nuove credenziali di persona.`);
+}
 async function verify(args) {
-  const password = args[args.length - 1];
-  const file = args.length > 1 ? args[0] : FILE;
-  if (!password) fail(`uso: ${CMD} verify "<PASSWORD>"`);
-  const env = JSON.parse(readFileSync3(file, "utf8"));
-  if (!isEnvelope(env)) fail(`${file} non \xE8 un file della piattaforma newsletter`);
+  const { password, chiave } = credenziali(args, 'verify "<PASSWORD>" "<CHIAVE>"');
+  const env = JSON.parse(readFileSync2(FILE, "utf8"));
+  if (!isEnvelope(env)) fail(`${FILE} non \xE8 un file della piattaforma newsletter`);
+  if (env.format !== 2) fail(`${FILE} \xE8 ancora nel vecchio formato a sola password: esegui \xABcambia\xBB.`);
   if (!envelopeSenzaDatiInChiaro(env)) fail("dati personali fuori dal blocco cifrato");
-  const a = await decryptJson(env.enc, password, aadFor(env.day)).catch(() => fail("password errata o file alterato"));
+  const a = await decryptJson(env.enc, segreto(password, chiave), aadFor(env.day)).catch(() => fail("password o chiave errate, o file alterato"));
   if (a.format !== 1 || a.day !== env.day || !Array.isArray(a.soggiorni)) fail("contenuto incompleto");
   const ids = /* @__PURE__ */ new Set();
   for (const s of a.soggiorni) {
@@ -919,8 +1028,8 @@ async function verify(args) {
   );
 }
 var [cmd, ...rest] = process.argv.slice(2);
-var job = cmd === "start" ? () => start(rest) : cmd === "next" ? next : cmd === "verify" ? () => verify(rest) : cmd === "importa" ? () => importa(rest) : null;
-if (!job) fail('comandi: start "<PASSWORD>" [--completo] [--primo] \xB7 next \xB7 verify "<PASSWORD>" \xB7 importa <file> "<PASSWORD>" [--casa \u2026]');
+var job = cmd === "start" ? () => start(rest) : cmd === "next" ? next : cmd === "verify" ? () => verify(rest) : cmd === "importa" ? () => importa(rest) : cmd === "cambia" ? () => cambia(rest) : cmd === "chiave" ? async () => out(nuovaChiave()) : null;
+if (!job) fail('comandi: start "<PASSWORD>" "<CHIAVE>" [--completo] [--primo] \xB7 next \xB7 verify \xB7 importa \xB7 cambia \xB7 chiave (vedi tools/AGGIORNA.md)');
 job().catch((e) => fail(e instanceof Error ? e.message : String(e)));
 export {
   guestArgs,

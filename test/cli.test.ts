@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { creaXlsx } from "../src/app/xlsx";
 import { eq, fine, ok } from "./assert";
 
 const PW = "Prova-ABCD-EFGH-IJKL";
@@ -65,8 +66,11 @@ const prenotazione = (i: number, o: Record<string, unknown> = {}): Record<string
 });
 
 // ── Giorno 1 ──
-ok(run("start", PW).includes("ERRORE"), "senza storico e senza --primo si ferma");
-let out = run("start", PW, "--primo");
+const CH = run("chiave").trim();
+ok(/^NLK-[A-Z2-9]{5}(-[A-Z2-9]{5}){4}$/.test(CH), `chiave generata nel formato giusto: ${CH}`);
+ok(run("start", PW).includes("servono password e chiave"), "senza chiave non parte");
+ok(run("start", PW, CH).includes("ERRORE"), "senza storico e senza --primo si ferma");
+let out = run("start", PW, CH, "--primo");
 const token = /SEGNO (\S+)/.exec(out)?.[1];
 ok(!!token, "start stampa il segno");
 appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash0", content: out }] } }) + "\n");
@@ -92,12 +96,14 @@ ok(out.includes("ATTENZIONE 1 soggiorni senza prenotazione"), "segnala soggiorni
 ok(out.includes("ospiti unici: 2"), "due ospiti utili");
 const file1 = readFileSync(join(repo, "ospiti.json"), "utf8");
 ok(!file1.includes("esempio.test") && !file1.includes("Nome1") && !file1.includes("+49"), "nessun dato personale in chiaro nel file");
-ok(run("verify", PW).includes("verifica OK"), "verify con la password giusta");
-ok(run("verify", "password-sbagliata").includes("ERRORE"), "verify con la password sbagliata");
+ok(run("verify", PW, CH).includes("verifica OK"), "verify con la password giusta");
+ok(run("verify", "password-sbagliata", CH).includes("ERRORE"), "verify con la password sbagliata");
 
 // ── Giorno 2: La Scatola ha «dimenticato» settembre ──
-ok(run("start", "password-sbagliata-123").includes("la password non apre"), "con password sbagliata non parte (lo storico non si perde)");
-out = run("start", PW, "--completo");
+ok(run("start", "password-sbagliata-123", CH).includes("non aprono"), "con password sbagliata non parte (lo storico non si perde)");
+ok(run("start", PW, run("chiave").trim()).includes("non aprono"), "con la sola password giusta e un'altra chiave non parte: doppio controllo");
+ok(!readFileSync(join(repo, "ospiti.json"), "utf8").includes('"format":1'), "il file è nel formato a doppio controllo");
+out = run("start", PW, CH, "--completo");
 const token2 = /SEGNO (\S+)/.exec(out)?.[1];
 appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash1", content: `${out} ${token2}` }] } }) + "\n");
 const h1 = chiama(run("next"));
@@ -109,10 +115,10 @@ out = run("next");
 ok(out.includes("PRONTO"), `il secondo aggiornamento finisce\n${out}`);
 ok(out.includes("ospiti unici: 2, abituali 1"), `ospite1 torna a febbraio: abituale grazie allo storico\n${out}`);
 ok(/storico: 3 soggiorni/.test(out), "settembre resta nello storico anche se La Scatola non lo ha più");
-ok(run("verify", PW).includes("2 ospiti unici, 1 abituali"), "verify del secondo giorno");
+ok(run("verify", PW, CH).includes("2 ospiti unici, 1 abituali"), "verify del secondo giorno");
 
 // ── Giorno 3: aggiornamento incrementale (solo l'ultima settimana e il futuro) ──
-out = run("start", PW);
+out = run("start", PW, CH);
 ok(out.includes("INCREMENTALE") || out.includes("COMPLETO (tutta"), "start annuncia il tipo di aggiornamento");
 const incrementale = out.includes("INCREMENTALE");
 appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash2", content: out }] } }) + "\n");
@@ -124,32 +130,66 @@ registra(ir, pagina([prenotazione(6)], null, 1));
 out = run("next");
 ok(out.includes("PRONTO") && /storico: 3 soggiorni/.test(out), `incrementale: storico intatto\n${out}`);
 
-// ── Importazione da un'esportazione di Slope (CSV inventato) ──
-const csv = join(root, "export.csv");
+// ── Importazione del pacchetto clienti: tre file distinti, uno per casa (CSV e un vero .xlsx) ──
+const fH = join(root, "hartmann.csv");
 writeFileSync(
-  csv,
+  fH,
   [
-    "Cognome;Nome;E-mail;Lingua;Nazionalità;Arrivo;Partenza;Struttura",
-    "Rossi;Anna;anna.rossi@esempio.test;Italiano;Italia;12/02/2026;16/02/2026;Smart Hotel Saslong",
-    "Rossi;Anna;anna.rossi@esempio.test;Italiano;Italia;03/08/2026;06/08/2026;Hotel Acadia",
-    "Quattro;Ospite;ospite4@esempio.test;Deutsch;Germany;20/03/2026;22/03/2026;Chalet Hartmann",
-    "Portale;Tizio;abc.1@guest.booking.com;en;GB;01/03/2026;03/03/2026;Saslong",
-    "Futuro;Caio;caio@esempio.test;en;GB;30/12/2026;02/01/2027;Saslong",
-    "Senza;Casa;sc@esempio.test;en;GB;01/03/2026;03/03/2026;Altrove",
+    "Cognome;Nome;E-mail;Lingua;Nazionalità;Arrivo;Partenza;Soggiorni",
+    "Quattro;Ospite;ospite4@esempio.test;Deutsch;Germany;20/03/2026;22/03/2026;",
+    "Verdi;Luca;luca.verdi@esempio.test;it;IT;10/01/2026;14/01/2026;3",
   ].join("\n"),
 );
-out = run("importa", csv, PW);
-ok(out.includes("PRONTO"), `importazione riuscita\n${out}`);
-ok(out.includes("righe importate: 3") && out.includes("1 email dei portali") && out.includes("1 senza data o casa leggibile") && out.includes("1 già coperte da La Scatola"), `conteggi dell'importazione\n${out}`);
-ok(out.includes("ospiti unici: 3, abituali 3"), `anna (2 viaggi), ospite1 e ospite4 (storico importato) abituali\n${out}`);
-ok(run("importa", csv, PW).includes("righe importate: 3") && run("verify", PW).includes("(3 importati)"), "reimportare lo stesso file non crea doppioni");
+const fA = join(root, "acadia.xlsx");
+writeFileSync(
+  fA,
+  creaXlsx([
+    {
+      nome: "Clienti",
+      colonne: [
+        { titolo: "Email", larghezza: 30, tipo: "testo" },
+        { titolo: "Nome", larghezza: 10, tipo: "testo" },
+        { titolo: "Cognome", larghezza: 10, tipo: "testo" },
+        { titolo: "Ultimo soggiorno", larghezza: 12, tipo: "data" },
+        { titolo: "Lingua", larghezza: 8, tipo: "testo" },
+      ],
+      righe: [
+        ["anna.rossi@esempio.test", "Anna", "Rossi", "2026-08-03", "Italiano"],
+        ["abc.1@guest.booking.com", "Tizio", "Portale", "2026-03-01", "en"],
+      ],
+    },
+  ]),
+);
+const fS = join(root, "saslong.csv");
+writeFileSync(
+  fS,
+  [
+    "Email,Nome,Cognome,Arrivo,Partenza",
+    "anna.rossi@esempio.test,Anna,Rossi,12/02/2026,16/02/2026",
+    "ospite4@esempio.test,Ospite,Quattro,27/12/2026,02/01/2027",
+    "sc@esempio.test,Senza,Data,,",
+  ].join("\n"),
+);
+ok(run("importa", PW, CH).includes("indica almeno un file"), "importa senza file si ferma");
+out = run("importa", PW, CH, "--hartmann", fH, "--acadia", fA, "--saslong", fS);
+ok(out.includes("PRONTO"), `importazione dei tre file riuscita\n${out}`);
+ok(/hartmann\.csv: 2 righe → 2 importate/.test(out), `Hartmann: 2 importate\n${out}`);
+ok(/acadia\.xlsx: 2 righe → 1 importate · scartate 1 email dei portali/.test(out), `Acadia (.xlsx): 1 importata, 1 portale\n${out}`);
+ok(/saslong\.csv: 3 righe → 1 importate.* 1 senza data o casa.* 1 già presenti da La Scatola/.test(out), `Saslong: 1 importata, 1 senza data, 1 già presente\n${out}`);
+ok(out.includes("ospiti unici: 4, abituali 4"), `abituali da storico, da più case e dalla colonna Soggiorni\n${out}`);
+ok(run("importa", PW, CH, "--hartmann", fH, "--acadia", fA, "--saslong", fS).includes("ospiti unici: 4") && run("verify", PW, CH).includes("(4 importati)"), "reimportare gli stessi file non crea doppioni");
 ok(!readFileSync(join(repo, "ospiti.json"), "utf8").includes("esempio.test"), "anche dopo l'importazione nessun dato in chiaro");
-out = run("start", PW);
+out = run("start", PW, CH);
 appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash3", content: out }] } }) + "\n");
 const j1 = chiama(run("next"));
 registra(j1, pagina([ospite(4, { reservation_id: "aaaaaaaa-0000-4000-8000-000000000099", stay_start: "2026-12-27", stay_end: "2027-01-02" }), ospite(6, { primary_email: "ospite1@esempio.test", stay_start: "2027-02-01", stay_end: "2027-02-05" })], null, 2));
 registra(chiama(run("next")), pagina([prenotazione(6)], null, 1));
 out = run("next");
-ok(out.includes("PRONTO") && out.includes("3 importati in tutto"), `i soggiorni importati restano dopo l'aggiornamento notturno\n${out}`);
+ok(out.includes("PRONTO") && out.includes("4 importati in tutto"), `i soggiorni importati restano dopo l'aggiornamento notturno\n${out}`);
+
+// ── Cambio delle credenziali ──
+const CH2 = run("chiave").trim();
+ok(run("cambia", PW, CH, "Nuova-Password-2027", CH2).includes("PRONTO"), "cambio di password e chiave");
+ok(run("verify", "Nuova-Password-2027", CH2).includes("verifica OK") && run("verify", PW, CH).includes("ERRORE"), "valgono solo le nuove credenziali");
 
 fine("programma dell'attività pianificata");

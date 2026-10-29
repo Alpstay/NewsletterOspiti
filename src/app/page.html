@@ -89,6 +89,21 @@
   .pager { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 14px 0; }
   .pager button { border: 1px solid var(--linea); background: #fff; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
   .pager button:disabled { opacity: .4; cursor: default; }
+  .chiave { display: grid; gap: 8px; padding: 12px; border: 1px dashed var(--oro); border-radius: 8px; background: var(--fondo-2); }
+  .chiave input[type=text] { padding: 10px; border: 1px solid var(--linea); border-radius: 8px; font-family: ui-monospace, Menlo, Consolas, monospace; letter-spacing: .04em; }
+  .lock label.riga { font-weight: 400; display: flex; gap: 8px; align-items: center; }
+  .aiuto { margin: 0; color: var(--grigio); font-size: 13px; }
+  .strumenti { display: grid; gap: 10px; margin-top: 14px; }
+  .strumenti details { border: 1px solid var(--linea); border-radius: 10px; padding: 4px 14px; background: var(--fondo-2); }
+  .strumenti summary { cursor: pointer; font-size: 18px; padding: 8px 0; color: var(--oro-scuro); }
+  .strumenti ul, .strumenti ol { padding-left: 20px; }
+  .strumenti code { font-size: 12px; word-break: break-all; }
+  .imp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 8px 0 12px; }
+  .imp-grid label { display: grid; gap: 4px; font-weight: 700; font-size: 14px; }
+  .imp-grid input { font-size: 13px; max-width: 100%; }
+  .esiti p { margin: 6px 0; font-size: 13px; }
+  .errore { color: var(--rosso); font-weight: 700; }
+  .pronto { border-top: 1px solid var(--linea); margin-top: 10px; padding: 8px 0 12px; }
   .note { color: var(--grigio); font-size: 12px; border-top: 1px solid var(--linea); padding-top: 10px; }
 
   /* Smartphone: ogni ospite diventa una scheda */
@@ -114,7 +129,14 @@
     <form id="lockForm" autocomplete="off">
       <label for="pw">Password</label>
       <input id="pw" type="password" autocomplete="current-password" required>
-      <button type="submit">Apri l'elenco</button>
+      <div id="boxChiave" class="chiave" hidden>
+        <label for="chiave">Chiave di questo computer</label>
+        <input id="chiave" type="text" autocomplete="off" spellcheck="false" placeholder="NLK-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX">
+        <label class="riga"><input type="checkbox" id="ricorda" checked> Ricorda su questo computer</label>
+        <p class="aiuto">Si inserisce una volta sola. La consegna di persona il responsabile: non arriva mai via email o chat.</p>
+      </div>
+      <p id="autorizzato" class="aiuto" hidden>Computer autorizzato. <button type="button" class="link" id="dimentica">Dimentica la chiave</button></p>
+      <button type="submit" id="apri">Apri l'elenco</button>
       <p class="msg" id="lockMsg" role="alert"></p>
     </form>
   </section>
@@ -141,6 +163,13 @@
       </table>
       <div class="pager" id="pager"></div>
       <p class="note" id="note"></p>
+      <section class="strumenti">
+        <details>
+          <summary>Esportazioni da questo computer</summary>
+          <div id="registro"></div>
+        </details>
+        <div id="importa" hidden></div>
+      </section>
     </section>
   </main>
 </div>

@@ -62,6 +62,8 @@ export interface Soggiorno {
   readonly vistoIl: string;
   /** "import" = da un'esportazione di Slope (gsid «imp-…» generato, mai un ID di Slope); assente = La Scatola. */
   readonly origine?: "import";
+  /** Numero di soggiorni dichiarato dall'esportazione di Slope (colonna «Soggiorni»), se maggiore di 1. */
+  readonly soggiorniDichiarati?: number;
 }
 
 /** Quante righe di La Scatola non sono entrate nello storico, e perché. */
@@ -102,7 +104,8 @@ export interface EncBlock {
 
 /** ospiti.json: in chiaro solo date e stato di freschezza, tutto il resto cifrato. */
 export interface Envelope {
-  readonly format: 1;
+  /** 1 = solo password (vecchio); 2 = password + chiave del computer (doppio controllo). */
+  readonly format: 1 | 2;
   readonly app: "newsletter-ospiti";
   readonly generated_at: string;
   readonly scatola_updated_at: string | null;

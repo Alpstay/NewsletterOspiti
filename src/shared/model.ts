@@ -300,7 +300,7 @@ export function ospitiDa(soggiorni: readonly Soggiorno[], oggi: string): Ospite[
     const caseSet = new Set(list.map((s) => casaDa(s.pid)).filter((k): k is CasaKey => k !== null));
     const passati = list.filter((s) => s.dal <= oggi);
     const futuri = list.filter((s) => s.dal > oggi);
-    const viaggi = contaViaggi(list);
+    const viaggi = Math.max(contaViaggi(list), ...list.map((s) => s.soggiorniDichiarati ?? 1));
     const primo = list[0].dal;
     const privacy = list.map((s) => s.privacyDal).filter((d): d is string => !!d).sort()[0] ?? null;
     const prenotata = list.map((s) => s.prenotataIl).filter((d): d is string => !!d).sort()[0] ?? null;
@@ -335,7 +335,7 @@ export function isEnvelope(v: unknown): v is Envelope {
   if (typeof v !== "object" || v === null) return false;
   const e = v as Record<string, unknown>;
   const enc = e.enc as Record<string, unknown> | undefined;
-  return e.format === 1 && e.app === APP && typeof e.day === "string" && typeof e.generated_at === "string" && !!enc && typeof enc.ct === "string" && typeof enc.iter === "number";
+  return (e.format === 1 || e.format === 2) && e.app === APP && typeof e.day === "string" && typeof e.generated_at === "string" && !!enc && typeof enc.ct === "string" && typeof enc.iter === "number";
 }
 
 /** Nessun dato personale fuori dal blocco cifrato: in chiaro non deve esserci nessuna «@». */

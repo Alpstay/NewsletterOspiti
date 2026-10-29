@@ -14,11 +14,23 @@ scaricare in Excel per la newsletter. Online su https://alpstay.github.io/Newsle
   conserva per 24 mesi dall'ultima partenza, così gli abituali si riconoscono anche negli anni.
 - **Solo i dati nuovi**: di notte si rileggono soltanto i soggiorni che finiscono dagli ultimi 7 giorni in
   poi (~4 chiamate); il 1° di ogni mese una lettura completa fa da rete di sicurezza.
-- **Importazione**: lo storico degli anni passati si carica da un'esportazione Excel/CSV di Slope con
-  `node tools/ospiti.mjs importa <file> "<PASSWORD>"` (dettagli in `tools/AGGIORNA.md`).
+- **Importazione**: il pacchetto clienti di Slope (un file Excel per casa: Hartmann, Acadia, Saslong) si aggiunge
+  dalla pagina o con `node tools/ospiti.mjs importa` (dettagli in `tools/AGGIORNA.md`).
 - **Pagina**: decifra nel browser; la Content-Security-Policy permette di scaricare dati solo dal
   proprio sito, quindi email e password non possono partire verso altri indirizzi. L'Excel si genera
   in locale.
+
+## Sicurezza
+
+- **Doppio controllo**: `ospiti.json` si apre solo con password **e** chiave del computer (`NLK-…`, circa 125 bit
+  casuali, salvata una volta sul computer autorizzato). Chi scarica il file pubblico, o conosce solo la password,
+  non può leggere nulla.
+- **Blocco automatico** dopo 15 minuti senza attività.
+- **Indirizzo di controllo** in ogni Excel (`info+nl-<data>-<codice>@alpstay.eu`, recapitato nella casella info):
+  se riceve messaggi che non sono la newsletter, quell'elenco è uscito, e il codice dice da quale esportazione.
+  Il registro delle esportazioni di ogni computer è nella pagina.
+- **GitHub**: accesso con verifica in due passaggi; il file si cambia solo da utenti autenticati o dall'attività
+  pianificata.
 
 ## Regole sui dati
 

@@ -1,9 +1,13 @@
 // Interfaccia della piattaforma newsletter: filtri, ordinamento a priorità, selezione ed export Excel.
 // Nessun dato esce dalla pagina: si decifra nel browser e l'Excel si genera in locale.
 
-import { CASE, ospitiDa } from "../shared/model";
+import { cifraArchivio } from "../shared/envelope";
+import { importaPacchetto, riassuntoEsito } from "../shared/importa";
+import type { FileImport } from "../shared/importa";
+import { CASE, ospitiDa, unisci } from "../shared/model";
+import { inflateBrowser, leggiTabella } from "../shared/tabella";
 import type { Archivio, Canale, CasaKey, Envelope, Ospite } from "../shared/types";
-import { NOMI_CANALE, fogli } from "./export";
+import { NOMI_CANALE, conControllo, emailControllo, fogli } from "./export";
 import { ORDINE_PREDEFINITO, conteggi, dataRiferimento, filtra, filtriVuoti, ordina, presetPeriodo } from "./filters";
 import type { Abituali, CanaleFiltro, Criterio, Filtri, Nomi, Ordine } from "./filters";
 import { creaXlsx } from "./xlsx";
@@ -104,8 +108,59 @@ interface Stato {
 
 const PER_PAGINA = 50;
 
+export interface Opzioni {
+  /** Segreto (password + chiave) per ricifrare dopo un'importazione; senza, il pannello di importazione non compare. */
+  readonly segreto?: string;
+  /** Un ospiti.json appena preparato da un'importazione, da scaricare e caricare su GitHub. */
+  readonly daCaricare?: { readonly json: string; readonly esiti: readonly string[] };
+}
+
+interface VoceRegistro {
+  readonly at: string;
+  readonly righe: number;
+  readonly controllo: string;
+}
+const REGISTRO_LS = "newsletter-ospiti-registro";
+function leggiRegistro(): VoceRegistro[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(REGISTRO_LS) ?? "[]");
+    return Array.isArray(v) ? (v as VoceRegistro[]).slice(0, 20) : [];
+  } catch {
+    return [];
+  }
+}
+function scriviRegistro(v: VoceRegistro): void {
+  try {
+    localStorage.setItem(REGISTRO_LS, JSON.stringify([v, ...leggiRegistro()].slice(0, 20)));
+  } catch {
+    /* archiviazione non disponibile */
+  }
+}
+
+/** Scarica un file generato in locale (funziona sulla pagina pubblicata; nelle anteprime può essere bloccato). */
+function scarica(dati: BlobPart, tipo: string, nome: string): void {
+  const url = URL.createObjectURL(new Blob([dati], { type: tipo }));
+  const link = h("a", { href: url, download: nome });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+let ctrlPrecedente: AbortController | null = null;
+
 /** Mostra l'elenco a partire dallo storico decifrato. */
-export function mostra(archivio: Archivio, env: Pick<Envelope, "generated_at" | "scatola_updated_at" | "freshness" | "day">, oggi: string): void {
+export function mostra(
+  archivio: Archivio,
+  env: Pick<Envelope, "generated_at" | "scatola_updated_at" | "freshness" | "day">,
+  oggi: string,
+  opzioni: Opzioni = {},
+): void {
+  // Una nuova chiamata (dopo un'importazione) sostituisce i gestori della precedente.
+  ctrlPrecedente?.abort();
+  const ctrl = new AbortController();
+  ctrlPrecedente = ctrl;
+  const sig = { signal: ctrl.signal };
   const ospiti = ospitiDa(archivio.soggiorni, oggi);
   const v = filtriVuoti();
   const st: Stato = {
@@ -133,7 +188,9 @@ export function mostra(archivio: Archivio, env: Pick<Envelope, "generated_at" | 
     `Esclusi automaticamente nell'ultima lettura completa di La Scatola: ${e.portale} email mascherate dei portali (Booking, Expedia…), ${e.nonValida} non valide, ` +
     `${e.interna} interne, ${e.minori} minorenni, ${e.cancellati} da prenotazioni cancellate. ` +
     `I soggiorni restano nello storico per ${archivio.conservazioneMesi} mesi dall'ultima partenza. ` +
-    `Le disiscrizioni si gestiscono nello strumento newsletter: reimportando l'elenco, chi si è disiscritto resta escluso.`;
+    `Le disiscrizioni si gestiscono nello strumento newsletter: reimportando l'elenco, chi si è disiscritto resta escluso. ` +
+    `Ogni Excel contiene un indirizzo di controllo info+nl-…@alpstay.eu: se riceve messaggi estranei alla newsletter, quell'elenco è uscito dall'azienda. ` +
+    `La pagina si richiude da sola dopo 15 minuti senza attività.`;
 
   const filtriAttivi = (): Filtri => st.filtri;
   let visibili: Ospite[] = [];
@@ -291,24 +348,121 @@ export function mostra(archivio: Archivio, env: Pick<Envelope, "generated_at" | 
   btnTutti.addEventListener("click", () => {
     for (const o of visibili) st.selezionati.add(o.email);
     disegna();
-  });
+  }, sig);
   btnNessuno.addEventListener("click", () => {
     st.selezionati.clear();
     disegna();
-  });
-  chkLingua.addEventListener("change", () => (st.perLingua = chkLingua.checked));
-  btnExcel.addEventListener("click", () => {
-    const daEsportare = st.selezionati.size ? visibili.filter((o) => st.selezionati.has(o.email)) : visibili;
-    if (!daEsportare.length) return;
-    const bytes = creaXlsx(fogli(daEsportare, st.perLingua, NOMI));
-    const blob = new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-    const url = URL.createObjectURL(blob);
-    const link = h("a", { href: url, download: `ospiti-newsletter-${oggi}.xlsx` });
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  });
+  }, sig);
+  chkLingua.addEventListener("change", () => (st.perLingua = chkLingua.checked), sig);
+  btnExcel.addEventListener(
+    "click",
+    () => {
+      const daEsportare = st.selezionati.size ? visibili.filter((o) => st.selezionati.has(o.email)) : visibili;
+      if (!daEsportare.length) return;
+      // Ogni file contiene un indirizzo di controllo unico: se riceve messaggi estranei alla newsletter, l'elenco è uscito
+      // e il codice dice da quale esportazione.
+      const codice = `nl-${oggi.replace(/-/g, "")}-${Math.random().toString(36).slice(2, 6)}`;
+      const bytes = creaXlsx(conControllo(fogli(daEsportare, st.perLingua, NOMI), emailControllo(codice)));
+      scarica(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", `ospiti-newsletter-${oggi}.xlsx`);
+      scriviRegistro({ at: new Date().toISOString(), righe: daEsportare.length, controllo: emailControllo(codice) });
+      disegnaRegistro();
+    },
+    sig,
+  );
+
+  // ── registro delle esportazioni (solo su questo computer) ──
+  const registroBox = $("registro");
+  const disegnaRegistro = (): void => {
+    const voci = leggiRegistro();
+    registroBox.replaceChildren(
+      voci.length
+        ? h(
+            "ul",
+            {},
+            ...voci.map((v) => h("li", {}, `${fmtOra(v.at)} · ${v.righe} ospiti · indirizzo di controllo `, h("code", {}, v.controllo))),
+          )
+        : h("p", { class: "muted" }, "Nessuna esportazione da questo computer."),
+    );
+  };
+  disegnaRegistro();
+
+  // ── importazione del pacchetto clienti (tre file Excel, uno per casa) ──
+  const impBox = $("importa");
+  impBox.hidden = !opzioni.segreto;
+  if (opzioni.segreto) {
+    const sgr = opzioni.segreto;
+    const inputs = CASE.map((c) => ({ casa: c, input: h("input", { type: "file", id: `imp-${c.key}`, accept: ".xlsx,.csv" }) }));
+    const esitiBox = h("div", { class: "esiti", "aria-live": "polite" });
+    const btnImporta = h("button", { type: "button", class: "btn" }, "Importa i file scelti");
+    btnImporta.addEventListener("click", async () => {
+      const scelti = inputs.filter((x) => x.input.files && x.input.files.length);
+      if (!scelti.length) {
+        esitiBox.replaceChildren(h("p", { class: "errore" }, "Scegli almeno un file (Hartmann, Acadia o Saslong)."));
+        return;
+      }
+      btnImporta.disabled = true;
+      esitiBox.replaceChildren(h("p", {}, "Lettura dei file…"));
+      try {
+        const file: FileImport[] = [];
+        for (const x of scelti) {
+          const f = x.input.files![0];
+          const righe = await leggiTabella(f.name, new Uint8Array(await f.arrayBuffer()), inflateBrowser);
+          file.push({ nome: `${x.casa.nome} (${f.name})`, casa: x.casa.id, righe });
+        }
+        const pac = await importaPacchetto(file, oggi, archivio.soggiorni);
+        const esiti = pac.esiti.map((e) => riassuntoEsito(e.nome, e.esito));
+        if (!pac.soggiorni.length) {
+          esitiBox.replaceChildren(...esiti.map((t) => h("p", {}, t)), h("p", { class: "errore" }, "Nessun cliente nuovo da aggiungere."));
+          btnImporta.disabled = false;
+          return;
+        }
+        const u = unisci(archivio.soggiorni, pac.soggiorni, () => false, oggi);
+        const nuovo: Archivio = { ...archivio, day: oggi, soggiorni: u.soggiorni };
+        const envNuovo = await cifraArchivio(nuovo, sgr, env.freshness, env.scatola_updated_at);
+        mostra(nuovo, envNuovo, oggi, { segreto: sgr, daCaricare: { json: `${JSON.stringify(envNuovo)}\n`, esiti } });
+      } catch (e) {
+        esitiBox.replaceChildren(h("p", { class: "errore" }, e instanceof Error ? e.message : String(e)));
+        btnImporta.disabled = false;
+      }
+    });
+    const pronto = opzioni.daCaricare;
+    const caricare = pronto
+      ? h(
+          "div",
+          { class: "pronto" },
+          h("p", {}, h("strong", {}, "Importazione pronta. "), "L'elenco qui sopra la include già. Per renderla definitiva:"),
+          h(
+            "ol",
+            {},
+            h("li", {}, "Scarica il file ospiti.json aggiornato (pulsante qui sotto)."),
+            h("li", {}, "Apri il repository NewsletterOspiti su GitHub, accedi con password e codice di verifica, scegli «Add file → Upload files»."),
+            h("li", {}, "Trascina ospiti.json, scrivi «Importazione pacchetto clienti» e premi «Commit changes». Fallo subito: l'aggiornamento notturno riparte da quel file."),
+          ),
+          ...pronto.esiti.map((t) => h("p", { class: "muted" }, t)),
+          (() => {
+            const b = h("button", { type: "button", class: "btn oro" }, "Scarica ospiti.json aggiornato");
+            b.addEventListener("click", () => scarica(pronto.json, "application/json", "ospiti.json"));
+            return b;
+          })(),
+        )
+      : null;
+    impBox.replaceChildren(
+      h(
+        "details",
+        { open: !!pronto },
+        h("summary", {}, "Aggiorna il pacchetto clienti da Excel"),
+        h(
+          "p",
+          { class: "muted" },
+          "Un file esportato da Slope per ogni casa (.xlsx o .csv) con almeno le colonne Email e Arrivo (o Ultimo soggiorno). Si riconoscono anche Nome, Cognome, Lingua, Cittadinanza, Partenza, Data di nascita e Soggiorni. I file restano su questo computer: non vengono inviati da nessuna parte.",
+        ),
+        h("div", { class: "imp-grid" }, ...inputs.map((x) => h("label", { for: x.input.id }, x.casa.nome, x.input))),
+        btnImporta,
+        esitiBox,
+        caricare,
+      ),
+    );
+  }
 
   // ── ordinamento a priorità ──
   const ordineBox = $("ordine");
@@ -337,13 +491,17 @@ export function mostra(archivio: Archivio, env: Pick<Envelope, "generated_at" | 
   // ── tabella ──
   const corpo = $("righe");
   const testaCb = $<HTMLInputElement>("selPagina");
-  testaCb.addEventListener("change", () => {
-    for (const o of paginaCorrente()) {
-      if (testaCb.checked) st.selezionati.add(o.email);
-      else st.selezionati.delete(o.email);
-    }
-    disegna();
-  });
+  testaCb.addEventListener(
+    "change",
+    () => {
+      for (const o of paginaCorrente()) {
+        if (testaCb.checked) st.selezionati.add(o.email);
+        else st.selezionati.delete(o.email);
+      }
+      disegna();
+    },
+    sig,
+  );
   const pager = $("pager");
   const paginaCorrente = (): Ospite[] => visibili.slice(st.pagina * PER_PAGINA, (st.pagina + 1) * PER_PAGINA);
 

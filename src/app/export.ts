@@ -60,3 +60,14 @@ export function fogli(ospiti: readonly Ospite[], perLingua: boolean, nomi: Nomi)
   }
   return [...gruppi].map(([lingua, list]) => ({ nome: `${nomi.lingua(lingua)} (${lingua})`, colonne: COLONNE, righe: list.map((o) => riga(o, nomi)) }));
 }
+
+/** Indirizzo di controllo (Microsoft 365 recapita gli indirizzi «info+qualcosa» nella casella info@alpstay.eu). */
+export const emailControllo = (codice: string): string => `info+${codice}@alpstay.eu`;
+
+/** Aggiunge in fondo a ogni foglio la riga dell'indirizzo di controllo. */
+export function conControllo(fs: readonly Foglio[], email: string): Foglio[] {
+  return fs.map((f) => ({
+    ...f,
+    righe: [...f.righe, f.colonne.map((c) => (c.titolo === "Email" ? email : c.titolo === "Nome" ? "AlpStay" : c.titolo === "Cognome" ? "Controllo" : null))],
+  }));
+}

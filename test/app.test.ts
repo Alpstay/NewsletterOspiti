@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { fogli } from "../src/app/export";
+import { conControllo, emailControllo, fogli } from "../src/app/export";
 import { ORDINE_PREDEFINITO, filtra, filtriVuoti, ordina, presetPeriodo } from "../src/app/filters";
 import type { Filtri, Nomi } from "../src/app/filters";
 import { creaXlsx, crc32, nomeFoglio, serialeData } from "../src/app/xlsx";
@@ -74,5 +74,9 @@ ok(xlsx1[0] === 0x50 && xlsx1[1] === 0x4b, "è un archivio ZIP");
 mkdirSync("out", { recursive: true });
 writeFileSync("out/prova-un-foglio.xlsx", xlsx1);
 writeFileSync("out/prova-per-lingua.xlsx", xlsx2);
+
+const ctrl = conControllo(fogli(lista, true, nomi), emailControllo("nl-20261029-ab12"));
+ok(ctrl.every((f) => f.righe[f.righe.length - 1][0] === "info+nl-20261029-ab12@alpstay.eu"), "ogni foglio termina con l'indirizzo di controllo");
+eq(ctrl[0].righe[ctrl[0].righe.length - 1].slice(1, 3), ["AlpStay", "Controllo"], "riga di controllo riconoscibile");
 
 fine("pagina (filtri, ordinamento, Excel)");

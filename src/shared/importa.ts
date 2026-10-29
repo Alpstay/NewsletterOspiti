@@ -1,10 +1,10 @@
-// Importazione dello storico da un'esportazione di Slope (Excel o CSV): dalle righe ai soggiorni dello storico.
-// Le colonne si riconoscono dal nome (italiano, inglese o tedesco), in qualunque ordine.
+// Importazione di un pacchetto clienti da Slope (Excel o CSV, un file per casa): dalle righe ai soggiorni dello storico.
+// Le colonne si riconoscono dal nome (italiano, inglese o tedesco), in qualunque ordine. Funziona in Node e nel browser.
 
-import { CASE, addMonths, capitalizza, emailEsclusa, normalizzaEmail } from "./model";
+import { CASE, addDays, addMonths, capitalizza, emailEsclusa, normalizzaEmail } from "./model";
 import type { Esclusi, Soggiorno } from "./types";
 
-export type Campo = "email" | "nome" | "cognome" | "nominativo" | "lingua" | "nazione" | "arrivo" | "partenza" | "casa" | "nascita";
+export type Campo = "email" | "nome" | "cognome" | "nominativo" | "lingua" | "nazione" | "arrivo" | "partenza" | "casa" | "nascita" | "soggiorni";
 
 const SINONIMI: Record<Campo, readonly string[]> = {
   email: ["email", "e-mail", "e mail", "mail", "indirizzo email", "email principale", "primary email", "e-mail-adresse"],
@@ -12,11 +12,29 @@ const SINONIMI: Record<Campo, readonly string[]> = {
   cognome: ["cognome", "last name", "lastname", "surname", "nachname", "cognome ospite"],
   nominativo: ["nominativo", "cliente", "ospite", "intestatario", "nome completo", "full name", "guest", "name"],
   lingua: ["lingua", "language", "sprache", "lingua ospite"],
-  nazione: ["cittadinanza", "nazionalita", "nazionalità", "nazione", "paese", "country", "citizenship", "nationality", "staatsangehorigkeit", "land"],
-  arrivo: ["arrivo", "data arrivo", "check-in", "check in", "checkin", "dal", "arrival", "anreise", "inizio soggiorno"],
+  nazione: ["cittadinanza", "nazionalita", "nazione", "paese", "country", "citizenship", "nationality", "staatsangehorigkeit", "land"],
+  arrivo: [
+    "arrivo",
+    "data arrivo",
+    "check-in",
+    "check in",
+    "checkin",
+    "dal",
+    "arrival",
+    "anreise",
+    "inizio soggiorno",
+    "ultimo soggiorno",
+    "data ultimo soggiorno",
+    "ultimo arrivo",
+    "ultima visita",
+    "last stay",
+    "last arrival",
+    "letzter aufenthalt",
+  ],
   partenza: ["partenza", "data partenza", "check-out", "check out", "checkout", "al", "departure", "abreise", "fine soggiorno"],
-  casa: ["struttura", "hotel", "casa", "property", "proprieta", "proprietà", "esercizio"],
+  casa: ["struttura", "hotel", "casa", "property", "proprieta", "esercizio"],
   nascita: ["data di nascita", "nascita", "birth date", "birthdate", "data nascita", "geburtsdatum"],
+  soggiorni: ["soggiorni", "numero soggiorni", "n soggiorni", "n soggiorno", "visite", "numero visite", "stays", "number of stays", "aufenthalte", "anzahl aufenthalte"],
 };
 
 const norm = (s: string): string =>
@@ -24,7 +42,7 @@ const norm = (s: string): string =>
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
-    .replace(/[_.:]+/g, " ")
+    .replace(/[_.:°]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -60,7 +78,7 @@ export function dataDa(v: string): string | null {
   return null;
 }
 
-/** Tabelle nome → codice ISO costruite con i nomi in italiano, inglese e tedesco (Intl). */
+/** Tabelle nome → codice ISO con i nomi in italiano, inglese e tedesco (Intl); vince il primo codice canonico. */
 function dizionario(type: "region" | "language", codici: readonly string[]): Map<string, string> {
   const m = new Map<string, string>();
   for (const loc of ["it", "en", "de"]) {
@@ -117,30 +135,50 @@ async function sha16(testo: string): Promise<string> {
 
 export interface EsitoImport {
   readonly soggiorni: Soggiorno[];
+  readonly righe: number;
   readonly esclusi: Esclusi;
-  /** Righe senza data di arrivo leggibile o senza casa riconoscibile. */
+  /** Righe senza data leggibile o senza casa riconoscibile. */
   readonly illeggibili: number;
-  /** Righe dal giorno in cui La Scatola copre già i dati: le aggiorna la lettura notturna. */
-  readonly giaInScatola: number;
+  /** Righe già presenti nello storico per lo stesso ospite, casa e periodo (da La Scatola). */
+  readonly giaPresenti: number;
+  /** Righe con ultimo soggiorno oltre il periodo di conservazione (24 mesi). */
+  readonly troppoVecchie: number;
   readonly colonne: Partial<Record<Campo, number>>;
 }
 
 /**
  * Righe di un'esportazione → soggiorni importati.
- * `casaPredefinita` (property_id) vale per le righe senza colonna struttura (esportazione di una sola casa).
- * `finoAl`: si importa solo prima di questo giorno (da lì in poi i dati arrivano da La Scatola).
+ * `casaPredefinita` (property_id) vale per le righe senza colonna struttura: è il caso dei tre file distinti per casa.
+ * `esistenti`: lo storico attuale; una riga che corrisponde a un soggiorno già letto da La Scatola (stesso ospite,
+ * stessa casa, date che si toccano) non si importa, perché La Scatola ha già il dato più completo.
  */
-export async function importaRighe(righe: readonly (readonly string[])[], oggi: string, finoAl: string | null, casaPredefinita: string | null): Promise<EsitoImport> {
+export async function importaRighe(
+  righe: readonly (readonly string[])[],
+  oggi: string,
+  esistenti: readonly Soggiorno[],
+  casaPredefinita: string | null,
+): Promise<EsitoImport> {
   const mappa = mappaColonne(righe);
-  if (!mappa) throw new Error("intestazione non riconosciuta: servono almeno una colonna email e una colonna arrivo (es. «Email», «Arrivo»)");
+  if (!mappa)
+    throw new Error("intestazione non riconosciuta: servono almeno una colonna «Email» e una colonna con la data (es. «Arrivo» o «Ultimo soggiorno»)");
   const c = mappa.colonne;
   const cella = (r: readonly string[], k: Campo): string => (c[k] !== undefined ? (r[c[k]!] ?? "") : "");
   const esclusi = { portale: 0, nonValida: 0, interna: 0, minori: 0, cancellati: 0 };
   let illeggibili = 0;
-  let giaInScatola = 0;
+  let giaPresenti = 0;
+  let troppoVecchie = 0;
+  const daScatola = new Map<string, Soggiorno[]>();
+  for (const s of esistenti)
+    if (s.origine !== "import") {
+      const k = `${s.email}|${s.pid}`;
+      const l = daScatola.get(k);
+      if (l) l.push(s);
+      else daScatola.set(k, [s]);
+    }
   const out = new Map<string, Soggiorno>();
   const limite = addMonths(oggi, -24);
-  for (const r of righe.slice(mappa.riga + 1)) {
+  const dati = righe.slice(mappa.riga + 1).filter((r) => r.some((x) => x !== ""));
+  for (const r of dati) {
     const grezza = cella(r, "email");
     if (!grezza) {
       esclusi.nonValida++;
@@ -158,10 +196,10 @@ export async function importaRighe(righe: readonly (readonly string[])[], oggi: 
       illeggibili++;
       continue;
     }
-    const al = dataDa(cella(r, "partenza")) ?? dal;
-    if (al < limite) continue; // oltre il periodo di conservazione: non si importa nemmeno
-    if (finoAl && dal >= finoAl) {
-      giaInScatola++;
+    const alLetto = dataDa(cella(r, "partenza"));
+    const al = alLetto && alLetto >= dal ? alLetto : dal;
+    if (al < limite) {
+      troppoVecchie++;
       continue;
     }
     const nascita = dataDa(cella(r, "nascita"));
@@ -170,9 +208,14 @@ export async function importaRighe(righe: readonly (readonly string[])[], oggi: 
       esclusi.minori++;
       continue;
     }
+    if ((daScatola.get(`${email}|${pid}`) ?? []).some((s) => s.dal <= addDays(al, 1) && s.al >= addDays(dal, -1))) {
+      giaPresenti++;
+      continue;
+    }
     let nome = capitalizza(cella(r, "nome"));
     const cognome = capitalizza(cella(r, "cognome"));
     if (!nome && !cognome) nome = capitalizza(cella(r, "nominativo"));
+    const n = Number.parseInt(cella(r, "soggiorni"), 10);
     const gsid = `imp-${await sha16(`${email}|${pid}|${dal}`)}`;
     out.set(gsid, {
       gsid,
@@ -184,14 +227,44 @@ export async function importaRighe(righe: readonly (readonly string[])[], oggi: 
       linguaSlope: linguaDa(cella(r, "lingua")),
       nazione: nazioneDa(cella(r, "nazione")),
       dal,
-      al: al >= dal ? al : dal,
+      al,
       privacyDal: null,
       prenotataIl: null,
       canale: null,
       maggiorenneDal,
       vistoIl: oggi,
       origine: "import",
+      ...(Number.isFinite(n) && n > 1 ? { soggiorniDichiarati: Math.min(n, 999) } : {}),
     });
   }
-  return { soggiorni: [...out.values()], esclusi, illeggibili, giaInScatola, colonne: c };
+  return { soggiorni: [...out.values()], righe: dati.length, esclusi, illeggibili, giaPresenti, troppoVecchie, colonne: c };
+}
+
+/** Un file del pacchetto clienti, già letto, con la casa a cui appartiene (null = colonna «Struttura» nel file). */
+export interface FileImport {
+  readonly nome: string;
+  readonly casa: string | null;
+  readonly righe: readonly (readonly string[])[];
+}
+
+/** Importa più file (tipicamente tre: Hartmann, Acadia, Saslong) e riassume l'esito per file. */
+export async function importaPacchetto(file: readonly FileImport[], oggi: string, esistenti: readonly Soggiorno[]): Promise<{ soggiorni: Soggiorno[]; esiti: { nome: string; esito: EsitoImport }[] }> {
+  const soggiorni: Soggiorno[] = [];
+  const esiti: { nome: string; esito: EsitoImport }[] = [];
+  for (const f of file) {
+    const esito = await importaRighe(f.righe, oggi, esistenti, f.casa);
+    if (esito.colonne.casa === undefined && !f.casa) throw new Error(`${f.nome}: manca la colonna «Struttura» e non è indicata la casa`);
+    soggiorni.push(...esito.soggiorni);
+    esiti.push({ nome: f.nome, esito });
+  }
+  return { soggiorni, esiti };
+}
+
+export function riassuntoEsito(nome: string, e: EsitoImport): string {
+  const x = e.esclusi;
+  return (
+    `${nome}: ${e.righe} righe → ${e.soggiorni.length} importate` +
+    ` · scartate ${x.portale} email dei portali, ${x.nonValida} senza email valida, ${x.interna} interne, ${x.minori} minori,` +
+    ` ${e.illeggibili} senza data o casa, ${e.troppoVecchie} oltre 24 mesi · ${e.giaPresenti} già presenti da La Scatola`
+  );
 }
