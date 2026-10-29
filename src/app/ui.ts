@@ -389,6 +389,18 @@ export function mostra(
   // ── importazione del pacchetto clienti (tre file Excel, uno per casa) ──
   const impBox = $("importa");
   impBox.hidden = !opzioni.segreto;
+  const vaiImporta = $("vaiImporta") as HTMLButtonElement;
+  vaiImporta.hidden = !opzioni.segreto;
+  vaiImporta.addEventListener(
+    "click",
+    () => {
+      const d = impBox.querySelector("details");
+      if (d) d.open = true;
+      impBox.scrollIntoView({ behavior: "smooth", block: "start" });
+      (impBox.querySelector("input[type=file]") as HTMLInputElement | null)?.focus({ preventScroll: true });
+    },
+    sig,
+  );
   if (opzioni.segreto) {
     const sgr = opzioni.segreto;
     const inputs = CASE.map((c) => ({ casa: c, input: h("input", { type: "file", id: `imp-${c.key}`, accept: ".xlsx,.csv" }) }));
