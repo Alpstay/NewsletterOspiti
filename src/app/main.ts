@@ -2,6 +2,9 @@
 // la password (che si ricorda) e la chiave del computer (inserita una volta sola, poi salvata su questo computer).
 
 import { aadFor, decryptJson, normalizzaChiave, segreto } from "../shared/crypto";
+import { elencoDisiscritti, pulisci } from "../shared/disiscritti";
+import { cifraArchivio } from "../shared/envelope";
+import { sospeseMancanti } from "./sospese";
 import { FILE, isEnvelope, romeDay } from "../shared/model";
 import type { Archivio, Envelope } from "../shared/types";
 import { mostra } from "./ui";
@@ -101,7 +104,20 @@ async function avvia(): Promise<void> {
       inChiave.value = "";
       msg.textContent = "";
       bloccoAutomatico();
-      mostra(archivio, env, romeDay(), { segreto: sgr });
+      const mancanti = sospeseMancanti(archivio);
+      if (mancanti.length) {
+        // Cancellazioni fatte qui ma non ancora nel file pubblicato: si riapplicano subito e si chiede di ricaricarlo.
+        const { archivio: pulito } = await pulisci({ ...archivio, disiscritti: [...elencoDisiscritti(archivio), ...mancanti] });
+        const envNuovo = await cifraArchivio(pulito, sgr, env.freshness, env.scatola_updated_at);
+        mostra(pulito, envNuovo, romeDay(), {
+          segreto: sgr,
+          daCaricare: {
+            titolo: "Cancellazioni da caricare.",
+            json: `${JSON.stringify(envNuovo)}\n`,
+            esiti: [`Su questo computer ci sono ${mancanti.length} cancellazioni dalla newsletter che il file pubblicato non contiene ancora. Sono già applicate all'elenco qui sotto: carica adesso il file su GitHub. Se l'hai appena caricato, aspetta due minuti e ricarica la pagina.`],
+          },
+        });
+      } else mostra(archivio, env, romeDay(), { segreto: sgr });
     } catch {
       msg.textContent = serveChiave ? "Password o chiave del computer non corrette." : "Password non corretta.";
       btn.disabled = false;

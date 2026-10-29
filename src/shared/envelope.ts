@@ -1,11 +1,13 @@
 // Costruzione di ospiti.json (busta in chiaro + storico cifrato), uguale per il programma e per la pagina.
 
 import { aadFor, decryptJson, encryptJson } from "./crypto";
-import { APP, envelopeSenzaDatiInChiaro, senzaEsclusi } from "./model";
+import { pulisci, soggiorniCancellati } from "./disiscritti";
+import { APP, envelopeSenzaDatiInChiaro } from "./model";
 import type { Archivio, Envelope, FreshnessStatus } from "./types";
 
 export async function cifraArchivio(grezzo: Archivio, sgr: string, freshness: FreshnessStatus, scatolaUpdatedAt: string | null): Promise<Envelope> {
-  const { archivio } = senzaEsclusi(grezzo);
+  const { archivio } = await pulisci(grezzo);
+  if (await soggiorniCancellati(archivio)) throw new Error("nello storico resta un indirizzo cancellato dalla newsletter");
   const envelope: Envelope = {
     format: 2,
     app: APP,

@@ -1,15 +1,18 @@
 // Interfaccia della piattaforma newsletter: filtri, ordinamento a priorità, selezione ed export Excel.
 // Nessun dato esce dalla pagina: si decifra nel browser e l'Excel si genera in locale.
 
+import { aadFor, decryptJson } from "../shared/crypto";
+import { cancellatoIl, disiscrivi, elencoDisiscritti, impronta, indirizziDa, pulisci, riattiva } from "../shared/disiscritti";
 import { cifraArchivio } from "../shared/envelope";
 import { importaPacchetto, riassuntoEsito } from "../shared/importa";
 import type { FileImport } from "../shared/importa";
-import { CASE, ospitiDa, unisci } from "../shared/model";
+import { CASE, FILE, isEnvelope, ospitiDa, unisci } from "../shared/model";
 import { inflateBrowser, leggiTabella } from "../shared/tabella";
 import type { Archivio, Canale, CasaKey, Envelope, Ospite } from "../shared/types";
 import { NOMI_CANALE, conControllo, emailControllo, fogli } from "./export";
 import { ORDINE_PREDEFINITO, conteggi, dataRiferimento, filtra, filtriVuoti, ordina, presetPeriodo } from "./filters";
 import type { Abituali, CanaleFiltro, Criterio, Filtri, Nomi, Ordine } from "./filters";
+import { dimenticaSospesa, ricordaSospese } from "./sospese";
 import { creaXlsx } from "./xlsx";
 
 type Attrs = Record<string, string | boolean | number | EventListener | undefined>;
@@ -111,8 +114,8 @@ const PER_PAGINA = 50;
 export interface Opzioni {
   /** Segreto (password + chiave) per ricifrare dopo un'importazione; senza, il pannello di importazione non compare. */
   readonly segreto?: string;
-  /** Un ospiti.json appena preparato da un'importazione, da scaricare e caricare su GitHub. */
-  readonly daCaricare?: { readonly json: string; readonly esiti: readonly string[] };
+  /** Un ospiti.json appena preparato (importazione o cancellazione), da scaricare e caricare su GitHub. */
+  readonly daCaricare?: { readonly titolo: string; readonly json: string; readonly esiti: readonly string[] };
 }
 
 interface VoceRegistro {
@@ -147,7 +150,30 @@ function scarica(dati: BlobPart, tipo: string, nome: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/**
+ * Base per una modifica: l'ultimo ospiti.json pubblicato (così una cancellazione fatta da un altro computer non
+ * si perde), oppure l'elenco in memoria se contiene già una modifica non ancora caricata.
+ */
+async function baseModifica(attuale: Archivio, sgr: string, inSospeso: boolean): Promise<Archivio> {
+  if (inSospeso) return attuale;
+  try {
+    const r = await fetch(`${FILE}?t=${Date.now()}`, { cache: "no-store" });
+    const env: unknown = r.ok ? await r.json() : null;
+    if (!isEnvelope(env)) return attuale;
+    const pubblicato = await decryptJson<Archivio>(env.enc, sgr, aadFor(env.day));
+    const visti = new Set<string>();
+    const lista = [...elencoDisiscritti(pubblicato), ...elencoDisiscritti(attuale)].filter((d) => !visti.has(d.h) && visti.add(d.h));
+    return { ...pubblicato, disiscritti: lista };
+  } catch {
+    return attuale;
+  }
+}
+
 let ctrlPrecedente: AbortController | null = null;
+let daSalvare = false;
+window.addEventListener("beforeunload", (ev) => {
+  if (daSalvare) ev.preventDefault();
+});
 
 /** Mostra l'elenco a partire dallo storico decifrato. */
 export function mostra(
@@ -188,7 +214,7 @@ export function mostra(
     `Esclusi automaticamente nell'ultima lettura completa di La Scatola: ${e.portale} email mascherate dei portali (Booking, Expedia…), ${e.nonValida} non valide, ` +
     `${e.interna} interne, ${e.minori} minorenni, ${e.cancellati} da prenotazioni cancellate. ` +
     `I soggiorni restano nello storico per ${archivio.conservazioneMesi} mesi dall'ultima partenza. ` +
-    `Le disiscrizioni si gestiscono nello strumento newsletter: reimportando l'elenco, chi si è disiscritto resta escluso. ` +
+    `Chi chiede di non ricevere più la newsletter si cancella con «Cancella un indirizzo»: sparisce dall'elenco e non rientra più. ` +
     `Ogni Excel contiene un indirizzo di controllo info+nl-…@alpstay.eu: se riceve messaggi estranei alla newsletter, quell'elenco è uscito dall'azienda. ` +
     `La pagina si richiude da sola dopo 15 minuti senza attività.`;
 
@@ -421,47 +447,27 @@ export function mostra(
           const righe = await leggiTabella(f.name, new Uint8Array(await f.arrayBuffer()), inflateBrowser);
           file.push({ nome: `${x.casa.nome} (${f.name})`, casa: x.casa.id, righe });
         }
-        const pac = await importaPacchetto(file, oggi, archivio.soggiorni);
+        const base = await baseModifica(archivio, sgr, !!opzioni.daCaricare);
+        const pac = await importaPacchetto(file, oggi, base.soggiorni);
         const esiti = pac.esiti.map((e) => riassuntoEsito(e.nome, e.esito));
         if (!pac.soggiorni.length) {
           esitiBox.replaceChildren(...esiti.map((t) => h("p", {}, t)), h("p", { class: "errore" }, "Nessun cliente nuovo da aggiungere."));
           btnImporta.disabled = false;
           return;
         }
-        const u = unisci(archivio.soggiorni, pac.soggiorni, () => false, oggi);
-        const nuovo: Archivio = { ...archivio, day: oggi, soggiorni: u.soggiorni };
+        const u = unisci(base.soggiorni, pac.soggiorni, () => false, oggi);
+        const { archivio: nuovo } = await pulisci({ ...base, day: oggi, soggiorni: u.soggiorni });
         const envNuovo = await cifraArchivio(nuovo, sgr, env.freshness, env.scatola_updated_at);
-        mostra(nuovo, envNuovo, oggi, { segreto: sgr, daCaricare: { json: `${JSON.stringify(envNuovo)}\n`, esiti } });
+        mostra(nuovo, envNuovo, oggi, { segreto: sgr, daCaricare: { titolo: "Importazione pronta.", json: `${JSON.stringify(envNuovo)}\n`, esiti } });
       } catch (e) {
         esitiBox.replaceChildren(h("p", { class: "errore" }, e instanceof Error ? e.message : String(e)));
         btnImporta.disabled = false;
       }
     });
-    const pronto = opzioni.daCaricare;
-    const caricare = pronto
-      ? h(
-          "div",
-          { class: "pronto" },
-          h("p", {}, h("strong", {}, "Importazione pronta. "), "L'elenco qui sopra la include già. Per renderla definitiva:"),
-          h(
-            "ol",
-            {},
-            h("li", {}, "Scarica il file ospiti.json aggiornato (pulsante qui sotto)."),
-            h("li", {}, "Apri il repository NewsletterOspiti su GitHub, accedi con password e codice di verifica, scegli «Add file → Upload files»."),
-            h("li", {}, "Trascina ospiti.json, scrivi «Importazione pacchetto clienti» e premi «Commit changes». Fallo subito: l'aggiornamento notturno riparte da quel file."),
-          ),
-          ...pronto.esiti.map((t) => h("p", { class: "muted" }, t)),
-          (() => {
-            const b = h("button", { type: "button", class: "btn oro" }, "Scarica ospiti.json aggiornato");
-            b.addEventListener("click", () => scarica(pronto.json, "application/json", "ospiti.json"));
-            return b;
-          })(),
-        )
-      : null;
     impBox.replaceChildren(
       h(
         "details",
-        { open: !!pronto },
+        { open: false },
         h("summary", {}, "Aggiorna il pacchetto clienti da Excel"),
         h(
           "p",
@@ -471,10 +477,135 @@ export function mostra(
         h("div", { class: "imp-grid" }, ...inputs.map((x) => h("label", { for: x.input.id }, x.casa.nome, x.input))),
         btnImporta,
         esitiBox,
-        caricare,
       ),
     );
   }
+
+  // ── modifica pronta da caricare su GitHub (importazione o cancellazione) ──
+  const pronto = opzioni.daCaricare;
+  const boxCaricare = $("daCaricare");
+  boxCaricare.hidden = !pronto;
+  daSalvare = !!pronto;
+  if (pronto) {
+    const b = h("button", { type: "button", class: "btn oro" }, "Scarica ospiti.json aggiornato");
+    b.addEventListener("click", () => scarica(pronto.json, "application/json", "ospiti.json"), sig);
+    boxCaricare.replaceChildren(
+      h("p", {}, h("strong", {}, pronto.titolo, " "), "L'elenco qui sotto la include già, ma vale solo su questo schermo finché non carichi il file:"),
+      h(
+        "ol",
+        {},
+        h("li", {}, "Premi «Scarica ospiti.json aggiornato»."),
+        h("li", {}, "Apri il repository NewsletterOspiti su GitHub (con password e codice di verifica) e scegli «Add file → Upload files»."),
+        h("li", {}, "Trascina ospiti.json e premi «Commit changes». Fallo subito: l'aggiornamento notturno riparte da quel file."),
+      ),
+      ...pronto.esiti.map((t) => h("p", { class: "muted" }, t)),
+      b,
+    );
+    boxCaricare.scrollIntoView({ block: "start" });
+  } else boxCaricare.replaceChildren();
+
+  // ── cancellazione dalla newsletter (richiesta dell'ospite) ──
+  const canBox = $("cancella");
+  canBox.hidden = !opzioni.segreto;
+  const vaiCancella = $("vaiCancella") as HTMLButtonElement;
+  vaiCancella.hidden = !opzioni.segreto;
+  if (opzioni.segreto) {
+    const sgr = opzioni.segreto;
+    const lista = elencoDisiscritti(archivio);
+    const campo = h("textarea", { id: "daCancellare", rows: 3, placeholder: "es. mario.rossi@gmail.com (anche più indirizzi, uno per riga)", spellcheck: "false" });
+    const btnCancella = h("button", { type: "button", class: "btn" }, "Cancella dalla newsletter");
+    const esitoBox = h("div", { class: "esiti", "aria-live": "polite" });
+    const errore = (t: string): void => esitoBox.replaceChildren(h("p", { class: "errore" }, t));
+    btnCancella.addEventListener(
+      "click",
+      async () => {
+        const emails = indirizziDa(campo.value);
+        if (!emails.length) return errore("Scrivi o incolla almeno un indirizzo email valido.");
+        btnCancella.disabled = true;
+        esitoBox.replaceChildren(h("p", {}, "Cancellazione in corso…"));
+        try {
+          const base = await baseModifica(archivio, sgr, !!opzioni.daCaricare);
+          // Indirizzi già nella lista: niente da fare, si offre la riattivazione (uno alla volta).
+          const date = await Promise.all(emails.map((e) => cancellatoIl(base, e)));
+          if (date.every(Boolean)) {
+            btnCancella.disabled = false;
+            const righe: HTMLElement[] = emails.map((e, i) => h("p", {}, `${e}: già cancellato dal ${fmtData(date[i])}.`));
+            if (emails.length === 1) {
+              const btnRiattiva = h("button", { type: "button", class: "btn ghost" }, "Riattiva questo indirizzo");
+              btnRiattiva.addEventListener(
+                "click",
+                async () => {
+                  btnRiattiva.disabled = true;
+                  const r = await riattiva(base, emails[0]);
+                  dimenticaSospesa(await impronta(emails[0]));
+                  const { archivio: nuovo } = await pulisci(r.archivio);
+                  const envNuovo = await cifraArchivio(nuovo, sgr, env.freshness, env.scatola_updated_at);
+                  mostra(nuovo, envNuovo, oggi, {
+                    segreto: sgr,
+                    daCaricare: {
+                      titolo: "Riattivazione pronta.",
+                      json: `${JSON.stringify(envNuovo)}\n`,
+                      esiti: [`${emails[0]} può di nuovo ricevere la newsletter: rientrerà nell'elenco con i prossimi soggiorni (quelli passati erano stati cancellati).`],
+                    },
+                  });
+                },
+                sig,
+              );
+              righe.push(h("p", { class: "muted" }, "Riattiva solo se l'ospite ha chiesto di nuovo, per iscritto, di ricevere la newsletter."), btnRiattiva);
+            }
+            esitoBox.replaceChildren(...righe);
+            return;
+          }
+          const r = await disiscrivi(base, emails, oggi);
+          ricordaSospese(elencoDisiscritti(r.archivio).filter((d) => d.dal === oggi));
+          const { archivio: nuovo } = await pulisci(r.archivio);
+          const envNuovo = await cifraArchivio(nuovo, sgr, env.freshness, env.scatola_updated_at);
+          const esiti = r.righe.map((x, i) =>
+            x.gia
+              ? `${x.email}: era già cancellato dal ${fmtData(date[i])}.`
+              : x.soggiorni
+                ? `${x.email}: cancellato${x.nome ? ` (${x.nome})` : ""}, tolti ${x.soggiorni} ${x.soggiorni === 1 ? "soggiorno" : "soggiorni"} dallo storico.`
+                : `${x.email}: non era nell'elenco; registrato comunque, così non entrerà mai.`,
+          );
+          esiti.push("Toglilo anche dallo strumento con cui spedisci la newsletter, se è già iscritto lì.");
+          mostra(nuovo, envNuovo, oggi, { segreto: sgr, daCaricare: { titolo: "Cancellazione pronta.", json: `${JSON.stringify(envNuovo)}\n`, esiti } });
+        } catch (e) {
+          btnCancella.disabled = false;
+          errore(e instanceof Error ? e.message : String(e));
+        }
+      },
+      sig,
+    );
+    canBox.replaceChildren(
+      h(
+        "details",
+        { open: false },
+        h("summary", {}, "Cancella un indirizzo dalla newsletter"),
+        h(
+          "p",
+          { class: "muted" },
+          "Quando un ospite chiede di non ricevere più la newsletter (per email, telefono o di persona): incolla il suo indirizzo e premi «Cancella». " +
+            "Sparisce subito dall'elenco e dagli Excel, i suoi soggiorni si tolgono dallo storico, e non rientra più: né con l'aggiornamento notturno, né con un'importazione. " +
+            "Dell'indirizzo resta solo un'impronta cifrata, che serve a riconoscerlo. Se hai sbagliato prima di caricare il file, ricarica la pagina.",
+        ),
+        h("label", { for: "daCancellare" }, "Indirizzo email"),
+        campo,
+        btnCancella,
+        esitoBox,
+        h("p", { class: "muted" }, lista.length ? `Indirizzi nella lista di cancellazione: ${lista.length} · ultima richiesta il ${fmtData(lista.map((d) => d.dal).sort().at(-1) ?? null)}.` : "Nessun indirizzo nella lista di cancellazione."),
+      ),
+    );
+  }
+  vaiCancella.addEventListener(
+    "click",
+    () => {
+      const d = canBox.querySelector("details");
+      if (d) d.open = true;
+      canBox.scrollIntoView({ behavior: "smooth", block: "start" });
+      (canBox.querySelector("textarea") as HTMLTextAreaElement | null)?.focus({ preventScroll: true });
+    },
+    sig,
+  );
 
   // ── ordinamento a priorità ──
   const ordineBox = $("ordine");

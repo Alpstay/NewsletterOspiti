@@ -187,9 +187,29 @@ registra(chiama(run("next")), pagina([prenotazione(6)], null, 1));
 out = run("next");
 ok(out.includes("PRONTO") && out.includes("4 importati in tutto"), `i soggiorni importati restano dopo l'aggiornamento notturno\n${out}`);
 
+// ── Cancellazione dalla newsletter ──
+out = run("cancella", PW, CH, "Ospite1@Esempio.test", "mai.visto@esempio.test");
+ok(/cancellati 2 indirizzi \(0 erano già nella lista\), tolti [1-9]\d* soggiorni/.test(out) && out.includes("PRONTO"), `cancellazione di due indirizzi\n${out}`);
+ok(!out.includes("esempio.test") && !out.includes("Nome1"), "la cancellazione non stampa indirizzi né nomi");
+out = run("verify", PW, CH);
+ok(out.includes("verifica OK") && out.includes("2 indirizzi cancellati"), `verify conta la lista di cancellazione\n${out}`);
+ok(run("cancella", PW, CH, "ospite1@esempio.test").includes("1 erano già nella lista"), "cancellare due volte non duplica");
+// La notte dopo La Scatola ripropone lo stesso ospite: non deve rientrare.
+out = run("start", PW, CH);
+appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash4", content: out }] } }) + "\n");
+registra(chiama(run("next")), pagina([ospite(4, { reservation_id: "aaaaaaaa-0000-4000-8000-000000000099", stay_start: "2026-12-27", stay_end: "2027-01-02" }), ospite(6, { primary_email: "ospite1@esempio.test", stay_start: "2027-02-01", stay_end: "2027-02-05" })], null, 2));
+registra(chiama(run("next")), pagina([prenotazione(6)], null, 1));
+out = run("next");
+ok(out.includes("PRONTO") && out.includes("lista di cancellazione: 1 soggiorni"), `l'aggiornamento notturno non reinserisce chi si è cancellato\n${out}`);
+out = run("verify", PW, CH);
+ok(out.includes("verifica OK") && out.includes("2 indirizzi cancellati"), `la lista sopravvive all'aggiornamento notturno\n${out}`);
+ok(run("cancella", PW, CH, "mai.visto@esempio.test", "--riattiva").includes("PRONTO") && run("verify", PW, CH).includes("1 indirizzi cancellati"), "riattivazione di un indirizzo");
+ok(run("cancella", PW, CH, "nessuno@esempio.test", "--riattiva").includes("non è nella lista"), "riattivare un indirizzo mai cancellato si ferma");
+
 // ── Cambio delle credenziali ──
 const CH2 = run("chiave").trim();
 ok(run("cambia", PW, CH, "Nuova-Password-2027", CH2).includes("PRONTO"), "cambio di password e chiave");
 ok(run("verify", "Nuova-Password-2027", CH2).includes("verifica OK") && run("verify", PW, CH).includes("ERRORE"), "valgono solo le nuove credenziali");
+ok(run("verify", "Nuova-Password-2027", CH2).includes("1 indirizzi cancellati"), "il cambio di credenziali conserva la lista di cancellazione");
 
 fine("programma dell'attività pianificata");

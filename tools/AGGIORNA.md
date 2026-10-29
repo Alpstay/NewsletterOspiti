@@ -82,6 +82,18 @@ Regole:
   dall'aggiornamento notturno. Reimportare gli stessi file non crea doppioni.
 - I file esportati contengono dati personali: **non si aggiungono mai al repository** (`.gitignore` li esclude).
 
+## Cancellazioni dalla newsletter
+
+Chi chiede di non ricevere più la newsletter si cancella dalla pagina («Cancella un indirizzo», poi si carica
+`ospiti.json` su GitHub) oppure da qui:
+```
+node tools/ospiti.mjs cancella "<PASSWORD>" "<CHIAVE>" indirizzo1 [indirizzo2 …]
+node tools/ospiti.mjs cancella "<PASSWORD>" "<CHIAVE>" indirizzo --riattiva   # solo su nuova richiesta scritta dell'ospite
+```
+Poi commit `Cancellazione newsletter <AAAA-MM-GG>` con il solo `ospiti.json` (nessun indirizzo nel messaggio).
+L'aggiornamento notturno conserva sempre la lista e non reinserisce mai quegli indirizzi; `verify` si ferma se
+nello storico ne resta uno.
+
 ## Credenziali (doppio controllo)
 
 - `node tools/ospiti.mjs chiave` genera una chiave del computer nuova.

@@ -1,6 +1,7 @@
 import { aadFor, decryptJson, encryptJson } from "../src/shared/crypto";
 import { addMonths, capitalizza, contaViaggi, emailEsclusa, linguaNewsletter, ospitiDa, prenotazioniDa, soggiornoDa, unisci } from "../src/shared/model";
-import type { Soggiorno } from "../src/shared/types";
+import { cancellatoIl, disiscrivi, impronta, indirizziDa, pulisci, riattiva, soggiorniCancellati } from "../src/shared/disiscritti";
+import type { Archivio, Soggiorno } from "../src/shared/types";
 import { eq, fine, ok } from "./assert";
 
 const ACADIA = "11111111-1111-4111-8111-111111111111";
@@ -152,5 +153,35 @@ ok(rifiutata, "password sbagliata rifiutata");
 let altroGiorno = false;
 await decryptJson(enc, "password-di-prova-123", aadFor("2026-10-30")).catch(() => (altroGiorno = true));
 ok(altroGiorno, "il blocco è legato al giorno scritto in chiaro");
+
+// ── lista di cancellazione ──
+eq(indirizziDa("Mario <Mario.Rossi@Gmail.com>; anna@x.it\nnon-email, mailto:anna@x.it"), ["mario.rossi@gmail.com", "anna@x.it"], "indirizzi da testo incollato, senza doppioni");
+eq(await impronta(" Anna@X.it "), await impronta("anna@x.it"), "impronta sull'email normalizzata");
+ok(/^[0-9a-f]{64}$/.test(await impronta("anna@x.it")), "impronta SHA-256 esadecimale");
+const arch: Archivio = {
+  format: 1,
+  day: OGGI,
+  finestraDal: null,
+  conservazioneMesi: 24,
+  esclusi: { portale: 0, nonValida: 0, interna: 0, minori: 0, cancellati: 0 },
+  soggiorni: [
+    S("dddddddd-0000-4000-8000-000000000001", { email: "anna@x.it", dal: "2026-01-10", al: "2026-01-12" }),
+    S("dddddddd-0000-4000-8000-000000000002", { email: "anna@x.it", dal: "2026-08-10", al: "2026-08-12" }),
+    S("dddddddd-0000-4000-8000-000000000003", { email: "bruno@x.it", dal: "2026-08-10", al: "2026-08-12" }),
+  ],
+};
+const dis = await disiscrivi(arch, ["ANNA@x.it", "mai@x.it"], OGGI);
+eq(dis.righe.map((r) => [r.email, r.soggiorni, r.gia]), [["anna@x.it", 2, false], ["mai@x.it", 0, false]], "esito della cancellazione");
+eq(dis.archivio.soggiorni.map((s) => s.gsid), ["dddddddd-0000-4000-8000-000000000003"], "tolti tutti i soggiorni dell'indirizzo, gli altri intatti con i loro ID");
+ok(!JSON.stringify(dis.archivio.disiscritti).includes("anna"), "nella lista resta solo l'impronta, non l'indirizzo");
+eq(await cancellatoIl(dis.archivio, "anna@x.it"), OGGI, "data della cancellazione");
+eq((await disiscrivi(dis.archivio, ["anna@x.it"], "2026-11-01")).righe[0].gia, true, "seconda cancellazione riconosciuta");
+// Un aggiornamento o un'importazione ripropone l'indirizzo: la pulizia lo toglie.
+const ritorno = { ...dis.archivio, soggiorni: [...dis.archivio.soggiorni, S("dddddddd-0000-4000-8000-000000000004", { email: "anna@x.it", dal: "2027-01-03", al: "2027-01-06" })] };
+eq(await soggiorniCancellati(ritorno), 1, "il controllo trova il soggiorno di un indirizzo cancellato");
+const pul = await pulisci(ritorno);
+eq([pul.cancellati, pul.archivio.soggiorni.length, await soggiorniCancellati(pul.archivio)], [1, 1, 0], "chi si è cancellato non rientra");
+const ria = await riattiva(pul.archivio, "anna@x.it");
+eq([ria.trovato, ria.archivio.disiscritti?.length], [true, 1], "riattivazione di un solo indirizzo");
 
 fine("modello");

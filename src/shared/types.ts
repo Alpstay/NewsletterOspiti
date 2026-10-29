@@ -92,6 +92,19 @@ export interface Archivio {
   readonly soggiorni: readonly Soggiorno[];
   /** Esclusioni dell'ultimo aggiornamento. */
   readonly esclusi: Esclusi;
+  /**
+   * Lista di cancellazione: ospiti che hanno chiesto di non ricevere più la newsletter.
+   * Si conserva solo l'impronta SHA-256 dell'email normalizzata (non l'indirizzo): basta per non
+   * reinserirli mai più, né dall'aggiornamento notturno né da un'importazione.
+   */
+  readonly disiscritti?: readonly Disiscritto[];
+}
+
+export interface Disiscritto {
+  /** SHA-256 esadecimale dell'email normalizzata. */
+  readonly h: string;
+  /** Giorno della richiesta (AAAA-MM-GG). */
+  readonly dal: string;
 }
 
 export interface EncBlock {

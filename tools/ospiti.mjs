@@ -520,6 +520,66 @@ function riassuntoEsito(nome, e) {
   return `${nome}: ${e.righe} righe \u2192 ${e.soggiorni.length} importate \xB7 scartate ${x.portale} email dei portali, ${x.nonValida} senza email valida, ${x.interna} interne, ${x.minori} minori, ${e.illeggibili} senza data o casa, ${e.troppoVecchie} oltre 24 mesi \xB7 ${e.giaPresenti} gi\xE0 presenti da La Scatola`;
 }
 
+// src/shared/disiscritti.ts
+var IMPRONTA = /^[0-9a-f]{64}$/;
+async function impronta(email) {
+  const dati = new TextEncoder().encode(normalizzaEmail(email));
+  const h = new Uint8Array(await crypto.subtle.digest("SHA-256", dati));
+  return Array.from(h, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+var elencoDisiscritti = (a) => (a.disiscritti ?? []).filter((d) => IMPRONTA.test(d.h));
+function indirizziDa(testo) {
+  const visti = /* @__PURE__ */ new Set();
+  for (const parte of testo.split(/[\s,;<>"']+/)) {
+    const e = normalizzaEmail(parte.replace(/^mailto:/i, ""));
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)) visti.add(e);
+  }
+  return [...visti];
+}
+async function disiscrivi(archivio, emails, oggi) {
+  const lista = [...elencoDisiscritti(archivio)];
+  const presenti = new Set(lista.map((d) => d.h));
+  const righe = [];
+  let soggiorni = archivio.soggiorni;
+  for (const raw of emails) {
+    const email = normalizzaEmail(raw);
+    const h = await impronta(email);
+    const suoi = soggiorni.filter((s) => s.email === email);
+    const nome = suoi.map((s) => [s.nome, s.cognome].filter(Boolean).join(" ")).find(Boolean) ?? null;
+    soggiorni = soggiorni.filter((s) => s.email !== email);
+    const gia = presenti.has(h);
+    if (!gia) {
+      lista.push({ h, dal: oggi });
+      presenti.add(h);
+    }
+    righe.push({ email, soggiorni: suoi.length, nome, gia });
+  }
+  return { archivio: { ...archivio, soggiorni, disiscritti: lista }, righe };
+}
+async function riattiva(archivio, email) {
+  const h = await impronta(email);
+  const lista = elencoDisiscritti(archivio);
+  const resto = lista.filter((d) => d.h !== h);
+  return { archivio: { ...archivio, disiscritti: resto }, trovato: resto.length !== lista.length };
+}
+async function pulisci(grezzo) {
+  const { archivio, tolti } = senzaEsclusi(grezzo);
+  const lista = elencoDisiscritti(archivio);
+  if (!lista.length) return { archivio: { ...archivio, disiscritti: [] }, esclusi: tolti, cancellati: 0 };
+  const vietate = new Set(lista.map((d) => d.h));
+  const impronte = /* @__PURE__ */ new Map();
+  for (const s of archivio.soggiorni) if (!impronte.has(s.email)) impronte.set(s.email, await impronta(s.email));
+  const soggiorni = archivio.soggiorni.filter((s) => !vietate.has(impronte.get(s.email)));
+  return { archivio: { ...archivio, soggiorni, disiscritti: lista }, esclusi: tolti, cancellati: archivio.soggiorni.length - soggiorni.length };
+}
+async function soggiorniCancellati(archivio) {
+  const vietate = new Set(elencoDisiscritti(archivio).map((d) => d.h));
+  if (!vietate.size) return 0;
+  let n = 0;
+  for (const s of archivio.soggiorni) if (vietate.has(await impronta(s.email))) n++;
+  return n;
+}
+
 // src/shared/tabella.ts
 var u16 = (b, p) => b[p] | b[p + 1] << 8;
 var u32 = (b, p) => (b[p] | b[p + 1] << 8 | b[p + 2] << 16 | b[p + 3] << 24) >>> 0;
@@ -848,9 +908,13 @@ function freschezza(list) {
   }
   return { status, updatedAt };
 }
-async function scrivi(grezzo, sgr, fresh) {
-  const { archivio, tolti } = senzaEsclusi(grezzo);
-  if (tolti > 0) console.log(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${tolti}`);
+async function scrivi(grezzo, sgr, fresh, prima) {
+  const visti = /* @__PURE__ */ new Set();
+  const lista = [...elencoDisiscritti(grezzo), ...prima ? elencoDisiscritti(prima) : []].filter((d) => !visti.has(d.h) && visti.add(d.h));
+  const { archivio, esclusi, cancellati } = await pulisci({ ...grezzo, disiscritti: lista });
+  if (esclusi > 0) out(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${esclusi}`);
+  if (cancellati > 0) out(`RIEPILOGO tolti dallo storico perch\xE9 nella lista di cancellazione: ${cancellati} soggiorni`);
+  if (await soggiorniCancellati(archivio)) fail("nello storico resta un indirizzo cancellato dalla newsletter. Non pubblicare.");
   const envelope = {
     format: 2,
     app: APP,
@@ -955,9 +1019,10 @@ async function next() {
     finestraDal: run.completo ? primoInizio : storico?.archivio.finestraDal ?? null,
     conservazioneMesi: CONSERVAZIONE_MESI,
     soggiorni: u.soggiorni,
-    esclusi: run.completo ? esclusi : storico?.archivio.esclusi ?? esclusi
+    esclusi: run.completo ? esclusi : storico?.archivio.esclusi ?? esclusi,
+    disiscritti: storico?.archivio.disiscritti ?? []
   };
-  const envelope = await scrivi(archivio, run.segreto, freschezza([...guests.freshness, ...res.freshness]));
+  const envelope = await scrivi(archivio, run.segreto, freschezza([...guests.freshness, ...res.freshness]), storico?.archivio ?? null);
   out(`RIEPILOGO aggiornamento ${run.completo ? "completo" : "incrementale"}: ${guests.rows.length} soggiorni con email letti${run.completo ? ` dal ${primoInizio}` : ` (fine soggiorno dal ${daIncr})`}, ${res.rows.length} prenotazioni lette`);
   out(
     `RIEPILOGO scartati: ${esclusi.portale} email dei portali, ${esclusi.nonValida} non valide, ${esclusi.interna} interne, ${esclusi.minori} minori, ${esclusi.cancellati} prenotazioni cancellate o in opzione`
@@ -996,7 +1061,7 @@ async function importa(args) {
   if (!pac.soggiorni.length) fail("nessun soggiorno importabile nei file indicati. Niente da pubblicare.");
   const u = unisci(storico.archivio.soggiorni, pac.soggiorni, () => false, day2);
   const archivio = { ...storico.archivio, day: day2, soggiorni: u.soggiorni };
-  await scrivi(archivio, sgr, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at });
+  await scrivi(archivio, sgr, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at }, storico.archivio);
   out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
   riepilogoOspiti(u.soggiorni, day2);
   out(`PRONTO ${FILE} scritto e verificato`);
@@ -1012,8 +1077,32 @@ async function cambia(args) {
   if (!isEnvelope(env)) fail(`${FILE} non \xE8 un file della piattaforma newsletter.`);
   const vecchio = segretoPer(env, pw, ch === "-" ? null : normalizzaChiave(ch));
   const archivio = await decryptJson(env.enc, vecchio, aadFor(env.day)).catch(() => fail("password o chiave attuali errate."));
-  await scrivi(archivio, segreto(nuovaPw, nuova), { status: env.freshness, updatedAt: env.scatola_updated_at });
+  await scrivi(archivio, segreto(nuovaPw, nuova), { status: env.freshness, updatedAt: env.scatola_updated_at }, archivio);
   out(`PRONTO ${FILE} ricifrato con le nuove credenziali (doppio controllo). Aggiorna il testo dell'attivit\xE0 pianificata e comunica le nuove credenziali di persona.`);
+}
+async function cancella(args) {
+  const { pos, opt } = argomenti(args, []);
+  const riattivare = opt.has("riattiva");
+  const { password, chiave } = credenziali(pos, 'cancella "<PASSWORD>" "<CHIAVE>" email1 [email2 \u2026] [--riattiva]');
+  const emails = indirizziDa(pos.slice(2).join(" "));
+  if (!emails.length) fail("indica almeno un indirizzo email.");
+  const sgr = segreto(password, chiave);
+  const storico = await leggiStorico(sgr, password);
+  if (!storico) fail(`${FILE} non c'\xE8.`);
+  const fresh = { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at };
+  if (riattivare) {
+    if (emails.length !== 1) fail("--riattiva vale per un indirizzo alla volta.");
+    const r2 = await riattiva(storico.archivio, emails[0]);
+    if (!r2.trovato) fail("l'indirizzo non \xE8 nella lista di cancellazione.");
+    await scrivi(r2.archivio, sgr, fresh, null);
+    out("PRONTO indirizzo tolto dalla lista di cancellazione (rientrer\xE0 con i prossimi soggiorni).");
+    return;
+  }
+  const r = await disiscrivi(storico.archivio, emails, romeDay());
+  await scrivi(r.archivio, sgr, fresh, storico.archivio);
+  const nuovi = r.righe.filter((x) => !x.gia).length;
+  out(`RIEPILOGO cancellati ${nuovi} indirizzi (${r.righe.length - nuovi} erano gi\xE0 nella lista), tolti ${r.righe.reduce((t, x) => t + x.soggiorni, 0)} soggiorni dallo storico`);
+  out(`PRONTO ${FILE} scritto e verificato`);
 }
 async function verify(args) {
   const { password, chiave } = credenziali(args, 'verify "<PASSWORD>" "<CHIAVE>"');
@@ -1032,15 +1121,16 @@ async function verify(args) {
     ids.add(s.gsid);
     if (emailEsclusa(s.email)) fail("nello storico c'\xE8 un'email che andava scartata");
   }
+  if (await soggiorniCancellati(a)) fail("nello storico c'\xE8 un indirizzo cancellato dalla newsletter");
   const ospiti = ospitiDa(a.soggiorni, env.day);
   const imp = a.soggiorni.filter((s) => s.origine === "import").length;
   out(
-    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, scritto ${env.generated_at}`
+    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, ${elencoDisiscritti(a).length} indirizzi cancellati dalla newsletter, scritto ${env.generated_at}`
   );
 }
 var [cmd, ...rest] = process.argv.slice(2);
-var job = cmd === "start" ? () => start(rest) : cmd === "next" ? next : cmd === "verify" ? () => verify(rest) : cmd === "importa" ? () => importa(rest) : cmd === "cambia" ? () => cambia(rest) : cmd === "chiave" ? async () => out(nuovaChiave()) : null;
-if (!job) fail('comandi: start "<PASSWORD>" "<CHIAVE>" [--completo] [--primo] \xB7 next \xB7 verify \xB7 importa \xB7 cambia \xB7 chiave (vedi tools/AGGIORNA.md)');
+var job = cmd === "start" ? () => start(rest) : cmd === "next" ? next : cmd === "verify" ? () => verify(rest) : cmd === "importa" ? () => importa(rest) : cmd === "cambia" ? () => cambia(rest) : cmd === "cancella" ? () => cancella(rest) : cmd === "chiave" ? async () => out(nuovaChiave()) : null;
+if (!job) fail('comandi: start "<PASSWORD>" "<CHIAVE>" [--completo] [--primo] \xB7 next \xB7 verify \xB7 importa \xB7 cancella \xB7 cambia \xB7 chiave (vedi tools/AGGIORNA.md)');
 job().catch((e) => fail(e instanceof Error ? e.message : String(e)));
 export {
   guestArgs,

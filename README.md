@@ -46,8 +46,12 @@ scaricare in Excel per la newsletter. Online su https://alpstay.github.io/Newsle
 - **Abituale**: almeno due soggiorni distinti nello storico (soggiorni attaccati, anche in case diverse,
   contano come uno), oppure informativa privacy accettata più di 14 giorni prima della prenotazione
   (cliente già noto a Slope).
-- Le disiscrizioni restano nello strumento newsletter: reimportando l'elenco, chi si è disiscritto
-  resta escluso.
+- **Cancellazione su richiesta** («Cancella un indirizzo» nella pagina, oppure `node tools/ospiti.mjs cancella`):
+  l'ospite sparisce dall'elenco e dagli Excel, tutti i suoi soggiorni si tolgono dallo storico e resta solo
+  l'impronta SHA-256 dell'email (dentro il file cifrato), così né l'aggiornamento notturno né un'importazione lo
+  reinseriscono. La lista non si perde mai: ogni scrittura la unisce a quella del file precedente, e la pagina
+  riapplica le cancellazioni fatte su quel computer finché il file pubblicato non le contiene. Va tolto anche dallo
+  strumento con cui si spedisce la newsletter.
 
 ## Sviluppo
 

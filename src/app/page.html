@@ -103,7 +103,10 @@
   .imp-grid input { font-size: 13px; max-width: 100%; }
   .esiti p { margin: 6px 0; font-size: 13px; }
   .errore { color: var(--rosso); font-weight: 700; }
-  .pronto { border-top: 1px solid var(--linea); margin-top: 10px; padding: 8px 0 12px; }
+  .pronto { border: 1px solid var(--oro); background: #faf6ee; border-radius: 10px; margin: 0 0 14px; padding: 10px 14px 14px; }
+  .pronto ol { margin: 6px 0 8px; padding-left: 20px; }
+  #cancella textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 8px; border: 1px solid var(--linea); border-radius: 8px; margin: 4px 0 10px; }
+  #cancella label { font-weight: 700; font-size: 14px; }
   .note { color: var(--grigio); font-size: 12px; border-top: 1px solid var(--linea); padding-top: 10px; }
 
   /* Smartphone: ogni ospite diventa una scheda */
@@ -144,6 +147,7 @@
   <main id="main" hidden>
     <aside class="filtri" id="filtri"></aside>
     <section>
+      <div class="pronto" id="daCaricare" hidden></div>
       <div class="barra">
         <span class="conta" id="conta"></span>
         <button type="button" class="btn ghost" id="selTutti">Seleziona tutti</button>
@@ -151,6 +155,7 @@
         <label><input type="checkbox" id="perLingua"> un foglio per lingua</label>
         <button type="button" class="btn oro" id="excel">Scarica Excel</button>
         <button type="button" class="btn ghost" id="vaiImporta" hidden>Importa Excel</button>
+        <button type="button" class="btn ghost" id="vaiCancella" hidden>Cancella un indirizzo</button>
       </div>
       <div class="ordine" id="ordine"></div>
       <table>
@@ -169,6 +174,7 @@
           <summary>Esportazioni da questo computer</summary>
           <div id="registro"></div>
         </details>
+        <div id="cancella" hidden></div>
         <div id="importa" hidden></div>
       </section>
     </section>

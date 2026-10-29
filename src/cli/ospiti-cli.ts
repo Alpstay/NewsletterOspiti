@@ -42,7 +42,7 @@ import {
   soggiornoDa,
   unisci,
 } from "../shared/model";
-import { senzaEsclusi } from "../shared/model";
+import { disiscrivi, elencoDisiscritti, indirizziDa, pulisci, riattiva, soggiorniCancellati } from "../shared/disiscritti";
 import type { Unione } from "../shared/model";
 import type { Archivio, Envelope, Esclusi, Freshness, FreshnessStatus, Soggiorno } from "../shared/types";
 import { leggiTabella } from "../shared/tabella";
@@ -150,9 +150,19 @@ function freschezza(list: readonly Freshness[]): { status: FreshnessStatus; upda
 }
 
 /** Cifra, ricontrolla e scrive ospiti.json. */
-async function scrivi(grezzo: Archivio, sgr: string, fresh: { status: FreshnessStatus; updatedAt: string | null }): Promise<Envelope> {
-  const { archivio, tolti } = senzaEsclusi(grezzo);
-  if (tolti > 0) console.log(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${tolti}`);
+async function scrivi(
+  grezzo: Archivio,
+  sgr: string,
+  fresh: { status: FreshnessStatus; updatedAt: string | null },
+  prima: Archivio | null,
+): Promise<Envelope> {
+  // La lista di cancellazione non si perde mai: si unisce sempre a quella del file precedente.
+  const visti = new Set<string>();
+  const lista = [...elencoDisiscritti(grezzo), ...(prima ? elencoDisiscritti(prima) : [])].filter((d) => !visti.has(d.h) && visti.add(d.h));
+  const { archivio, esclusi, cancellati } = await pulisci({ ...grezzo, disiscritti: lista });
+  if (esclusi > 0) out(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${esclusi}`);
+  if (cancellati > 0) out(`RIEPILOGO tolti dallo storico perché nella lista di cancellazione: ${cancellati} soggiorni`);
+  if (await soggiorniCancellati(archivio)) fail("nello storico resta un indirizzo cancellato dalla newsletter. Non pubblicare.");
   const envelope: Envelope = {
     format: 2,
     app: APP,
@@ -280,8 +290,9 @@ async function next(): Promise<void> {
     conservazioneMesi: CONSERVAZIONE_MESI,
     soggiorni: u.soggiorni,
     esclusi: run.completo ? esclusi : (storico?.archivio.esclusi ?? esclusi),
+    disiscritti: storico?.archivio.disiscritti ?? [],
   };
-  const envelope = await scrivi(archivio, run.segreto, freschezza([...guests.freshness, ...res.freshness]));
+  const envelope = await scrivi(archivio, run.segreto, freschezza([...guests.freshness, ...res.freshness]), storico?.archivio ?? null);
 
   out(`RIEPILOGO aggiornamento ${run.completo ? "completo" : "incrementale"}: ${guests.rows.length} soggiorni con email letti${run.completo ? ` dal ${primoInizio}` : ` (fine soggiorno dal ${daIncr})`}, ${res.rows.length} prenotazioni lette`);
   out(
@@ -323,7 +334,7 @@ async function importa(args: string[]): Promise<void> {
   // L'importazione non toglie nulla: nessun soggiorno è «coperto» dalla lettura.
   const u = unisci(storico.archivio.soggiorni, pac.soggiorni, () => false, day);
   const archivio: Archivio = { ...storico.archivio, day, soggiorni: u.soggiorni };
-  await scrivi(archivio, sgr, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at });
+  await scrivi(archivio, sgr, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at }, storico.archivio);
   out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
   riepilogoOspiti(u.soggiorni, day);
   out(`PRONTO ${FILE} scritto e verificato`);
@@ -340,8 +351,35 @@ async function cambia(args: string[]): Promise<void> {
   if (!isEnvelope(env)) fail(`${FILE} non è un file della piattaforma newsletter.`);
   const vecchio = segretoPer(env, pw, ch === "-" ? null : normalizzaChiave(ch));
   const archivio = await decryptJson<Archivio>(env.enc, vecchio, aadFor(env.day)).catch(() => fail("password o chiave attuali errate."));
-  await scrivi(archivio, segreto(nuovaPw, nuova), { status: env.freshness, updatedAt: env.scatola_updated_at });
+  await scrivi(archivio, segreto(nuovaPw, nuova), { status: env.freshness, updatedAt: env.scatola_updated_at }, archivio);
   out(`PRONTO ${FILE} ricifrato con le nuove credenziali (doppio controllo). Aggiorna il testo dell'attività pianificata e comunica le nuove credenziali di persona.`);
+}
+
+/** Cancella uno o più indirizzi dalla newsletter (richiesta dell'ospite). Stampa solo conteggi, mai nomi. */
+async function cancella(args: string[]): Promise<void> {
+  const { pos, opt } = argomenti(args, []);
+  const riattivare = opt.has("riattiva");
+  const { password, chiave } = credenziali(pos, 'cancella "<PASSWORD>" "<CHIAVE>" email1 [email2 …] [--riattiva]');
+  const emails = indirizziDa(pos.slice(2).join(" "));
+  if (!emails.length) fail("indica almeno un indirizzo email.");
+  const sgr = segreto(password, chiave);
+  const storico = await leggiStorico(sgr, password);
+  if (!storico) fail(`${FILE} non c'è.`);
+  const fresh = { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at };
+  if (riattivare) {
+    if (emails.length !== 1) fail("--riattiva vale per un indirizzo alla volta.");
+    const r = await riattiva(storico.archivio, emails[0]);
+    if (!r.trovato) fail("l'indirizzo non è nella lista di cancellazione.");
+    // Unico caso in cui la lista si accorcia: non si unisce a quella precedente.
+    await scrivi(r.archivio, sgr, fresh, null);
+    out("PRONTO indirizzo tolto dalla lista di cancellazione (rientrerà con i prossimi soggiorni).");
+    return;
+  }
+  const r = await disiscrivi(storico.archivio, emails, romeDay());
+  await scrivi(r.archivio, sgr, fresh, storico.archivio);
+  const nuovi = r.righe.filter((x) => !x.gia).length;
+  out(`RIEPILOGO cancellati ${nuovi} indirizzi (${r.righe.length - nuovi} erano già nella lista), tolti ${r.righe.reduce((t, x) => t + x.soggiorni, 0)} soggiorni dallo storico`);
+  out(`PRONTO ${FILE} scritto e verificato`);
 }
 
 async function verify(args: string[]): Promise<void> {
@@ -361,10 +399,11 @@ async function verify(args: string[]): Promise<void> {
     ids.add(s.gsid);
     if (emailEsclusa(s.email)) fail("nello storico c'è un'email che andava scartata");
   }
+  if (await soggiorniCancellati(a)) fail("nello storico c'è un indirizzo cancellato dalla newsletter");
   const ospiti = ospitiDa(a.soggiorni, env.day);
   const imp = a.soggiorni.filter((s) => s.origine === "import").length;
   out(
-    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, scritto ${env.generated_at}`,
+    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, ${elencoDisiscritti(a).length} indirizzi cancellati dalla newsletter, scritto ${env.generated_at}`,
   );
 }
 
@@ -380,8 +419,10 @@ const job =
           ? () => importa(rest)
           : cmd === "cambia"
             ? () => cambia(rest)
+            : cmd === "cancella"
+              ? () => cancella(rest)
             : cmd === "chiave"
               ? async () => out(nuovaChiave())
               : null;
-if (!job) fail('comandi: start "<PASSWORD>" "<CHIAVE>" [--completo] [--primo] · next · verify · importa · cambia · chiave (vedi tools/AGGIORNA.md)');
+if (!job) fail('comandi: start "<PASSWORD>" "<CHIAVE>" [--completo] [--primo] · next · verify · importa · cancella · cambia · chiave (vedi tools/AGGIORNA.md)');
 job().catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));
