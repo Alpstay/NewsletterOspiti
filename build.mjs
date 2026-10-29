@@ -57,6 +57,8 @@ mkdirSync("dist", { recursive: true });
 const prova = `<!doctype html>\n<html lang="it">\n<head>\n<meta charset="utf-8">\n<meta name="viewport" content="width=device-width,initial-scale=1">\n${head}\n</head>\n<body>\n${corpo(await bundle("src/app/prova.ts"))}\n</body>\n</html>\n`;
 writeFileSync("dist/prova.html", prova);
 console.log("ok dist/prova.html", Math.round(prova.length / 1024), "KB");
+// Stessa anteprima senza scheletro HTML, per pubblicarla come artifact claude.ai.
+writeFileSync("dist/anteprima-artifact.html", `<meta name="robots" content="noindex">\n${head.replace(/<title>[^<]*<\/title>/, "<title>Ospiti newsletter AlpStay</title>")}\n${corpo(await bundle("src/app/prova.ts"))}\n`);
 
 // 3) Programma dell'attività pianificata.
 await build({

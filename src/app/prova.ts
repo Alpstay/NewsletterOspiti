@@ -72,4 +72,4 @@ const archivio: Archivio = {
 };
 document.getElementById("stato")!.textContent = "Anteprima con ospiti inventati";
 mostra(archivio, { generated_at: new Date().toISOString(), scatola_updated_at: null, freshness: "fresh", day: oggi }, oggi);
-document.getElementById("stato")!.textContent = "ANTEPRIMA con ospiti inventati: nessun dato reale";
+document.getElementById("stato")!.textContent = "ANTEPRIMA con 140 ospiti inventati, nessun dato reale. Qui il pulsante Excel non scarica: funziona nella pagina pubblicata.";
