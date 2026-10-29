@@ -6,12 +6,12 @@ import { cancellatoIl, disiscrivi, elencoDisiscritti, impronta, indirizziDa, pul
 import { cifraArchivio } from "../shared/envelope";
 import { importaPacchetto, riassuntoEsito } from "../shared/importa";
 import type { FileImport } from "../shared/importa";
-import { CASE, FILE, isEnvelope, ospitiDa, unisci } from "../shared/model";
+import { CASE, FILE, isEnvelope, ospitiDa, unisci, unisciContatti } from "../shared/model";
 import { inflateBrowser, leggiTabella } from "../shared/tabella";
 import type { Archivio, Canale, CasaKey, Envelope, Ospite } from "../shared/types";
 import { NOMI_CANALE, conControllo, emailControllo, fogli } from "./export";
 import { ORDINE_PREDEFINITO, conteggi, dataRiferimento, filtra, filtriVuoti, ordina, presetPeriodo } from "./filters";
-import type { Abituali, CanaleFiltro, Criterio, Filtri, Nomi, Ordine } from "./filters";
+import type { Abituali, CanaleFiltro, ConsensoFiltro, Criterio, Filtri, Nomi, Ordine } from "./filters";
 import { dimenticaSospesa, ricordaSospese } from "./sospese";
 import { creaXlsx } from "./xlsx";
 
@@ -98,6 +98,7 @@ interface Stato {
     da: string | null;
     a: string | null;
     abituali: Abituali;
+    consenso: ConsensoFiltro;
     canali: Set<CanaleFiltro>;
     testo: string;
   };
@@ -187,12 +188,12 @@ export function mostra(
   const ctrl = new AbortController();
   ctrlPrecedente = ctrl;
   const sig = { signal: ctrl.signal };
-  const ospiti = ospitiDa(archivio.soggiorni, oggi);
+  const ospiti = ospitiDa(archivio.soggiorni, oggi, archivio.contatti ?? []);
   const v = filtriVuoti();
   const st: Stato = {
     ospiti,
     oggi,
-    filtri: { case: new Set(), lingue: new Set(), nazioni: new Set(), da: v.da, a: v.a, abituali: v.abituali, canali: new Set(), testo: "" },
+    filtri: { case: new Set(), lingue: new Set(), nazioni: new Set(), da: v.da, a: v.a, abituali: v.abituali, consenso: v.consenso, canali: new Set(), testo: "" },
     preset: "tutti",
     ordini: [...ORDINE_PREDEFINITO],
     selezionati: new Set(),
@@ -249,17 +250,20 @@ export function mostra(
   const presets = presetPeriodo(oggi);
   const selPeriodo = h("select", { id: "periodo" });
   for (const p of presets) selPeriodo.append(h("option", { value: p.id }, p.etichetta));
-  selPeriodo.append(h("option", { value: "custom" }, "Date a scelta…"));
+  selPeriodo.append(h("option", { value: "custom" }, "Date a scelta"));
+  // Le date sono sempre visibili: un periodo pronto le compila, e scriverne una passa a «Date a scelta».
   const da = h("input", { type: "date", id: "da", "aria-label": "Dal" });
   const a = h("input", { type: "date", id: "a", "aria-label": "Al" });
-  const dateBox = h("div", { class: "date", hidden: true }, h("label", {}, "dal ", da), h("label", {}, "al ", a));
+  const notaDate = h("small", { class: "muted" }, "Contano i soggiorni che toccano il periodo. I clienti della sola anagrafica, senza date, restano fuori.");
+  const dateBox = h("div", { class: "date" }, h("label", {}, "dal ", da), h("label", {}, "al ", a), notaDate);
   selPeriodo.addEventListener("change", () => {
     st.preset = selPeriodo.value;
     const p = presets.find((x) => x.id === st.preset);
-    dateBox.hidden = st.preset !== "custom";
     if (p) {
       st.filtri.da = p.da;
       st.filtri.a = p.a;
+      da.value = p.da ?? "";
+      a.value = p.a ?? "";
     } else {
       st.filtri.da = da.value || null;
       st.filtri.a = a.value || null;
@@ -268,8 +272,11 @@ export function mostra(
   });
   for (const inp of [da, a])
     inp.addEventListener("change", () => {
+      if (da.value && a.value && da.value > a.value) [da.value, a.value] = [a.value, da.value];
       st.filtri.da = da.value || null;
       st.filtri.a = a.value || null;
+      st.preset = st.filtri.da || st.filtri.a ? "custom" : "tutti";
+      selPeriodo.value = st.preset;
       aggiorna();
     });
 
@@ -319,6 +326,23 @@ export function mostra(
     segAbituali.append(b);
   }
 
+  const nConsenso = (c: ConsensoFiltro): number => (c === "tutti" ? ospiti.length : ospiti.filter((o) => (o.consenso ?? "nd") === c).length);
+  const segConsenso = h("div", { class: "seg", role: "group", "aria-label": "Consenso marketing" });
+  for (const [val, lab] of [
+    ["tutti", "Tutti"],
+    ["si", "Sì"],
+    ["no", "No"],
+    ["nd", "Non indicato"],
+  ] as [ConsensoFiltro, string][]) {
+    const b = h("button", { type: "button", "aria-pressed": String(val === "tutti"), title: `${nConsenso(val)} ospiti` }, lab);
+    b.addEventListener("click", () => {
+      st.filtri.consenso = val;
+      for (const x of Array.from(segConsenso.children)) x.setAttribute("aria-pressed", String(x === b));
+      aggiorna();
+    });
+    segConsenso.append(b);
+  }
+
   const canaliPresenti = conteggi(ospiti, (o) => o.canale ?? "ignoto");
   const canaliBox = checklist(
     canaliPresenti,
@@ -334,17 +358,18 @@ export function mostra(
     st.filtri.canali.clear();
     st.filtri.da = st.filtri.a = null;
     st.filtri.abituali = "tutti";
+    st.filtri.consenso = "tutti";
     st.filtri.testo = "";
     st.preset = "tutti";
     cerca.value = "";
     cercaNaz.value = "";
     selPeriodo.value = "tutti";
-    dateBox.hidden = true;
     da.value = a.value = "";
     for (const x of Array.from(pannello.querySelectorAll<HTMLInputElement>("input[type=checkbox]"))) x.checked = false;
     for (const x of Array.from(pannello.querySelectorAll<HTMLLabelElement>(".checklist label"))) x.hidden = false;
     for (const x of Array.from(caseBox.children)) x.setAttribute("aria-pressed", "false");
     for (const x of Array.from(segAbituali.children)) x.setAttribute("aria-pressed", String(x === segAbituali.firstElementChild));
+    for (const x of Array.from(segConsenso.children)) x.setAttribute("aria-pressed", String(x === segConsenso.firstElementChild));
     aggiorna();
   });
 
@@ -360,6 +385,7 @@ export function mostra(
       gruppo("Lingua", lingueBox),
       gruppo("Nazione", cercaNaz, nazioniBox),
       gruppo("Abituali", segAbituali),
+      gruppo("Consenso marketing (anagrafica Slope)", segConsenso),
       gruppo("Canale ultima prenotazione", canaliBox),
       azzera,
     ),
@@ -450,13 +476,13 @@ export function mostra(
         const base = await baseModifica(archivio, sgr, !!opzioni.daCaricare);
         const pac = await importaPacchetto(file, oggi, base.soggiorni);
         const esiti = pac.esiti.map((e) => riassuntoEsito(e.nome, e.esito));
-        if (!pac.soggiorni.length) {
+        if (!pac.soggiorni.length && !pac.contatti.length) {
           esitiBox.replaceChildren(...esiti.map((t) => h("p", {}, t)), h("p", { class: "errore" }, "Nessun cliente nuovo da aggiungere."));
           btnImporta.disabled = false;
           return;
         }
         const u = unisci(base.soggiorni, pac.soggiorni, () => false, oggi);
-        const { archivio: nuovo } = await pulisci({ ...base, day: oggi, soggiorni: u.soggiorni });
+        const { archivio: nuovo } = await pulisci({ ...base, day: oggi, soggiorni: u.soggiorni, contatti: unisciContatti(base.contatti ?? [], pac.contatti) });
         const envNuovo = await cifraArchivio(nuovo, sgr, env.freshness, env.scatola_updated_at);
         mostra(nuovo, envNuovo, oggi, { segreto: sgr, daCaricare: { titolo: "Importazione pronta.", json: `${JSON.stringify(envNuovo)}\n`, esiti } });
       } catch (e) {
@@ -472,7 +498,8 @@ export function mostra(
         h(
           "p",
           { class: "muted" },
-          "Un file esportato da Slope per ogni casa (.xlsx o .csv) con almeno le colonne Email e Arrivo (o Ultimo soggiorno). Si riconoscono anche Nome, Cognome, Lingua, Cittadinanza, Partenza, Data di nascita e Soggiorni. I file restano su questo computer: non vengono inviati da nessuna parte.",
+          "Un file esportato da Slope per ogni casa (.xlsx o .csv). Va bene l'anagrafica clienti («patrons»: Nome, Cognome, E-mail, Lingua, Aut. e-mail marketing) oppure un elenco con le date (Email e Arrivo o Ultimo soggiorno). " +
+            "Gli indirizzi doppi si uniscono, quelli con booking o expedia si scartano, i minorenni pure. Telefono, documenti e codice fiscale non vengono letti. I file restano su questo computer: non vengono inviati da nessuna parte.",
         ),
         h("div", { class: "imp-grid" }, ...inputs.map((x) => h("label", { for: x.input.id }, x.casa.nome, x.input))),
         btnImporta,
@@ -563,8 +590,8 @@ export function mostra(
           const esiti = r.righe.map((x, i) =>
             x.gia
               ? `${x.email}: era già cancellato dal ${fmtData(date[i])}.`
-              : x.soggiorni
-                ? `${x.email}: cancellato${x.nome ? ` (${x.nome})` : ""}, tolti ${x.soggiorni} ${x.soggiorni === 1 ? "soggiorno" : "soggiorni"} dallo storico.`
+              : x.soggiorni || x.anagrafica
+                ? `${x.email}: cancellato${x.nome ? ` (${x.nome})` : ""}${x.soggiorni ? `, tolti ${x.soggiorni} ${x.soggiorni === 1 ? "soggiorno" : "soggiorni"} dallo storico` : ""}${x.anagrafica ? ", tolto dall'anagrafica importata" : ""}.`
                 : `${x.email}: non era nell'elenco; registrato comunque, così non entrerà mai.`,
           );
           esiti.push("Toglilo anche dallo strumento con cui spedisci la newsletter, se è già iscritto lì.");
@@ -669,12 +696,17 @@ export function mostra(
         });
         const soggiorno = o.prossimo
           ? h("span", {}, `arriva ${fmtData(o.prossimo)}`, o.ultimo ? h("small", {}, `ultimo ${fmtData(o.ultimo)}`) : null)
-          : h("span", {}, fmtData(o.ultimo ?? dataRiferimento(o)));
+          : o.soggiorni.length
+            ? h("span", {}, fmtData(o.ultimo ?? dataRiferimento(o)))
+            : h("span", { class: "muted", title: "Cliente dell'anagrafica di Slope: le date compaiono quando ha un soggiorno in La Scatola" }, "solo anagrafica");
         return h(
           "tr",
           { class: st.selezionati.has(o.email) ? "sel" : "" },
           h("td", { class: "cb" }, cb),
-          h("td", { class: "ospite", "data-l": "Ospite" }, h("strong", {}, `${o.nome} ${o.cognome}`.trim() || "—"), h("span", { class: "email" }, o.email)),
+          h("td", { class: "ospite", "data-l": "Ospite" }, h("strong", {}, `${o.nome} ${o.cognome}`.trim() || "—"),
+            h("span", { class: "email" }, o.email),
+            o.consenso ? h("small", { class: o.consenso === "si" ? "consenso" : "muted" }, o.consenso === "si" ? "consenso marketing: sì" : "consenso marketing: no") : null,
+          ),
           h(
             "td",
             { "data-l": "Lingua" },
@@ -687,7 +719,7 @@ export function mostra(
           h(
             "td",
             { "data-l": "Abituale" },
-            o.abituale ? h("span", { class: "badge", title: o.motivoAbituale ?? "" }, "Abituale") : h("span", { class: "muted" }, "Nuovo"),
+            o.abituale ? h("span", { class: "badge", title: o.motivoAbituale ?? "" }, "Abituale") : h("span", { class: "muted" }, o.soggiorni.length ? "Nuovo" : "—"),
             o.abituale && o.motivoAbituale ? h("small", {}, o.motivoAbituale) : null,
           ),
         );

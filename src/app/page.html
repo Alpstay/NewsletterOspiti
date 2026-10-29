@@ -51,6 +51,8 @@
   input[type=search], input[type=date], select { width: 100%; padding: 9px 10px; border: 1px solid var(--linea); border-radius: 8px; background: #fff; }
   input.mini { padding: 6px 8px; margin-bottom: 6px; font-size: 14px; }
   .date { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--grigio); }
+  .date small { grid-column: 1 / -1; font-size: 12px; }
+  .date input { width: 100%; box-sizing: border-box; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip, .seg button { border: 1px solid var(--linea); background: #fff; border-radius: 999px; padding: 7px 12px; cursor: pointer; min-height: 38px; }
   .chip small { color: var(--grigio); }
@@ -83,6 +85,8 @@
   tr.sel td { background: var(--oro-chiaro); }
   td.ospite strong { display: block; }
   .email { color: var(--grigio); font-size: 13px; word-break: break-all; }
+  td.ospite small { display: block; font-size: 12px; }
+  td.ospite small.consenso { color: #2f6b3a; }
   .badge { display: inline-block; background: var(--oro); color: #fff; border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 700; }
   .muted { color: var(--grigio); font-size: 13px; }
   td.vuoto { text-align: center; color: var(--grigio); padding: 32px; }

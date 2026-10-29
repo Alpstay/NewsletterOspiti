@@ -249,7 +249,25 @@ function contaViaggi(sogg) {
   }
   return n;
 }
-function ospitiDa(soggiorni, oggi) {
+function consensoUnito(valori) {
+  const noti = valori.filter((v) => v !== null);
+  return noti.length ? noti.every((v) => v === "si") ? "si" : "no" : null;
+}
+var CONTATTO_ID = /^ana-[0-9a-f]{16}$/;
+function unisciContatti(prev, nuovi) {
+  const m = new Map(prev.map((c) => [c.id, c]));
+  for (const c of nuovi) m.set(c.id, c);
+  return [...m.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+function ospitiDa(soggiorni, oggi, contatti = []) {
+  const anagrafica = /* @__PURE__ */ new Map();
+  for (const c of contatti) {
+    if (c.maggiorenneDal && c.maggiorenneDal > oggi) continue;
+    if (emailEsclusa(c.email)) continue;
+    const l = anagrafica.get(c.email);
+    if (l) l.push(c);
+    else anagrafica.set(c.email, [c]);
+  }
   const perEmail = /* @__PURE__ */ new Map();
   for (const s of soggiorni) {
     if (s.maggiorenneDal && s.maggiorenneDal > oggi) continue;
@@ -259,15 +277,42 @@ function ospitiDa(soggiorni, oggi) {
     else perEmail.set(s.email, [s]);
   }
   const out2 = [];
+  for (const [email, ana] of anagrafica) {
+    if (perEmail.has(email)) continue;
+    const nazione = ana.find((c) => c.nazione)?.nazione ?? null;
+    const linguaSlope = ana.find((c) => c.linguaSlope && c.linguaSlope !== "it")?.linguaSlope ?? ana.find((c) => c.linguaSlope)?.linguaSlope ?? null;
+    const { lingua, dedotta } = linguaNewsletter(linguaSlope, nazione);
+    const caseSet = new Set(ana.map((c) => casaDa(c.pid)));
+    out2.push({
+      email,
+      nome: ana.find((c) => c.nome)?.nome ?? "",
+      cognome: ana.find((c) => c.cognome)?.cognome ?? "",
+      lingua,
+      linguaDedotta: dedotta,
+      nazione,
+      case: CASE.map((c) => c.key).filter((k) => caseSet.has(k)),
+      primo: null,
+      ultimo: null,
+      prossimo: null,
+      viaggi: 0,
+      clienteDal: null,
+      abituale: false,
+      motivoAbituale: null,
+      canale: null,
+      consenso: consensoUnito(ana.map((c) => c.consenso)),
+      soggiorni: []
+    });
+  }
   for (const [email, list] of perEmail) {
+    const ana = anagrafica.get(email) ?? [];
     list.sort((a, b) => a.dal.localeCompare(b.dal) || a.gsid.localeCompare(b.gsid));
     const recente = list[list.length - 1];
-    const nome = [...list].reverse().find((s) => s.nome)?.nome ?? "";
-    const cognome = [...list].reverse().find((s) => s.cognome)?.cognome ?? "";
-    const nazione = [...list].reverse().find((s) => s.nazione)?.nazione ?? null;
-    const linguaSlope = [...list].reverse().find((s) => s.linguaSlope && s.linguaSlope !== "it")?.linguaSlope ?? recente.linguaSlope;
+    const nome = [...list].reverse().find((s) => s.nome)?.nome ?? ana.find((c) => c.nome)?.nome ?? "";
+    const cognome = [...list].reverse().find((s) => s.cognome)?.cognome ?? ana.find((c) => c.cognome)?.cognome ?? "";
+    const nazione = [...list].reverse().find((s) => s.nazione)?.nazione ?? ana.find((c) => c.nazione)?.nazione ?? null;
+    const linguaSlope = [...list].reverse().find((s) => s.linguaSlope && s.linguaSlope !== "it")?.linguaSlope ?? ana.find((c) => c.linguaSlope && c.linguaSlope !== "it")?.linguaSlope ?? recente.linguaSlope;
     const { lingua, dedotta } = linguaNewsletter(linguaSlope, nazione);
-    const caseSet = new Set(list.map((s) => casaDa(s.pid)).filter((k) => k !== null));
+    const caseSet = new Set([...list.map((s) => casaDa(s.pid)), ...ana.map((c) => casaDa(c.pid))].filter((k) => k !== null));
     const passati = list.filter((s) => s.dal <= oggi);
     const futuri = list.filter((s) => s.dal > oggi);
     const viaggi = Math.max(contaViaggi(list), ...list.map((s) => s.soggiorniDichiarati ?? 1));
@@ -293,6 +338,7 @@ function ospitiDa(soggiorni, oggi) {
       abituale,
       motivoAbituale: viaggi >= 2 ? `${viaggi} soggiorni` : clienteNoto ? `cliente dal ${meseAnno(privacy)}` : null,
       canale: recente.canale,
+      consenso: consensoUnito(ana.map((c) => c.consenso)),
       soggiorni: list.map((s) => ({ casa: casaDa(s.pid), dal: s.dal, al: s.al }))
     });
   }
@@ -310,8 +356,11 @@ function envelopeSenzaDatiInChiaro(e) {
 }
 function senzaEsclusi(archivio) {
   const soggiorni = archivio.soggiorni.filter((s) => emailEsclusa(s.email) === null);
-  const tolti = archivio.soggiorni.length - soggiorni.length;
-  return tolti === 0 ? { archivio, tolti } : { archivio: { ...archivio, soggiorni }, tolti };
+  const limite = addMonths(archivio.day, -archivio.conservazioneMesi);
+  const prima = archivio.contatti ?? [];
+  const contatti = prima.filter((c) => emailEsclusa(c.email) === null && c.importatoIl >= limite);
+  const tolti = archivio.soggiorni.length - soggiorni.length + prima.length - contatti.length;
+  return tolti === 0 ? { archivio, tolti } : { archivio: { ...archivio, soggiorni, contatti }, tolti };
 }
 
 // src/shared/importa.ts
@@ -343,10 +392,25 @@ var SINONIMI = {
   partenza: ["partenza", "data partenza", "check-out", "check out", "checkout", "al", "departure", "abreise", "fine soggiorno"],
   casa: ["struttura", "hotel", "casa", "property", "proprieta", "esercizio"],
   nascita: ["data di nascita", "nascita", "birth date", "birthdate", "data nascita", "geburtsdatum"],
+  consenso: [
+    "aut e-mail marketing",
+    "aut email marketing",
+    "autorizzazione e-mail marketing",
+    "autorizzazione email marketing",
+    "consenso marketing",
+    "consenso newsletter",
+    "newsletter",
+    "marketing",
+    "email marketing",
+    "e-mail marketing",
+    "marketing consent",
+    "newsletter consent"
+  ],
   soggiorni: ["soggiorni", "numero soggiorni", "n soggiorni", "n soggiorno", "visite", "numero visite", "stays", "number of stays", "aufenthalte", "anzahl aufenthalte"]
 };
 var norm = (s) => s.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase().replace(/[_.:°]+/g, " ").replace(/\s+/g, " ").trim();
 function mappaColonne(righe) {
+  let anagrafica = null;
   for (let r = 0; r < Math.min(10, righe.length); r++) {
     const intest = righe[r].map(norm);
     const colonne = {};
@@ -354,8 +418,17 @@ function mappaColonne(righe) {
       const i = intest.findIndex((h) => SINONIMI[campo].some((s) => h === norm(s)));
       if (i >= 0) colonne[campo] = i;
     }
-    if (colonne.email !== void 0 && colonne.arrivo !== void 0) return { riga: r, colonne };
+    if (colonne.email !== void 0 && colonne.arrivo !== void 0) return { riga: r, colonne, tipo: "soggiorni" };
+    if (!anagrafica && colonne.email !== void 0 && (colonne.nome !== void 0 || colonne.cognome !== void 0 || colonne.nominativo !== void 0))
+      anagrafica = { riga: r, colonne, tipo: "anagrafica" };
   }
+  return anagrafica;
+}
+function consensoDa(v) {
+  const s = norm(v);
+  if (!s) return null;
+  if (["si", "yes", "y", "ja", "x", "1", "true", "vero", "s"].includes(s)) return "si";
+  if (["no", "n", "nein", "0", "false", "falso"].includes(s)) return "no";
   return null;
 }
 function dataDa(v) {
@@ -425,7 +498,8 @@ async function sha16(testo) {
 async function importaRighe(righe, oggi, esistenti, casaPredefinita) {
   const mappa = mappaColonne(righe);
   if (!mappa)
-    throw new Error("intestazione non riconosciuta: servono almeno una colonna \xABEmail\xBB e una colonna con la data (es. \xABArrivo\xBB o \xABUltimo soggiorno\xBB)");
+    throw new Error("intestazione non riconosciuta: servono almeno una colonna \xABEmail\xBB e una con la data (\xABArrivo\xBB o \xABUltimo soggiorno\xBB) oppure con il nome (anagrafica clienti)");
+  if (mappa.tipo === "anagrafica") return importaAnagrafica(righe, mappa.riga, mappa.colonne, oggi, casaPredefinita);
   const c = mappa.colonne;
   const cella = (r, k) => c[k] !== void 0 ? r[c[k]] ?? "" : "";
   const esclusi = { portale: 0, nonValida: 0, interna: 0, minori: 0, cancellati: 0 };
@@ -502,21 +576,77 @@ async function importaRighe(righe, oggi, esistenti, casaPredefinita) {
       ...Number.isFinite(n) && n > 1 ? { soggiorniDichiarati: Math.min(n, 999) } : {}
     });
   }
-  return { soggiorni: [...out2.values()], righe: dati.length, esclusi, illeggibili, giaPresenti, troppoVecchie, colonne: c };
+  return { tipo: "soggiorni", soggiorni: [...out2.values()], contatti: [], doppioni: 0, righe: dati.length, esclusi, illeggibili, giaPresenti, troppoVecchie, colonne: c };
+}
+async function importaAnagrafica(righe, riga, c, oggi, casaPredefinita) {
+  const cella = (r, k) => c[k] !== void 0 ? r[c[k]] ?? "" : "";
+  const esclusi = { portale: 0, nonValida: 0, interna: 0, minori: 0, cancellati: 0 };
+  let illeggibili = 0;
+  let doppioni = 0;
+  const perId = /* @__PURE__ */ new Map();
+  const dati = righe.slice(riga + 1).filter((r) => r.some((x) => x !== ""));
+  for (const r of dati) {
+    const grezza = cella(r, "email");
+    if (!grezza) {
+      esclusi.nonValida++;
+      continue;
+    }
+    const email = normalizzaEmail(grezza);
+    const motivo = emailEsclusa(email);
+    if (motivo) {
+      esclusi[motivo]++;
+      continue;
+    }
+    const pid = (c.casa !== void 0 ? casaIdDa(cella(r, "casa")) : null) ?? casaPredefinita;
+    if (!pid) {
+      illeggibili++;
+      continue;
+    }
+    const nascita = dataDa(cella(r, "nascita"));
+    const maggiorenneDal = nascita ? addMonths(nascita, 18 * 12) : null;
+    if (maggiorenneDal && maggiorenneDal > oggi) {
+      esclusi.minori++;
+      continue;
+    }
+    const consenso = c.consenso !== void 0 ? consensoDa(cella(r, "consenso")) : null;
+    const id = `ana-${await sha16(`${email}|${pid}`)}`;
+    const gia = perId.get(id);
+    if (gia) {
+      doppioni++;
+      gia.consensi.push(consenso);
+      continue;
+    }
+    let nome = capitalizza(cella(r, "nome"));
+    const cognome = capitalizza(cella(r, "cognome"));
+    if (!nome && !cognome) nome = capitalizza(cella(r, "nominativo"));
+    perId.set(id, {
+      base: { id, pid, email, nome, cognome, linguaSlope: linguaDa(cella(r, "lingua")), nazione: nazioneDa(cella(r, "nazione")), consenso, maggiorenneDal, importatoIl: oggi },
+      consensi: [consenso]
+    });
+  }
+  const contatti = [...perId.values()].map((x) => ({ ...x.base, consenso: consensoUnito(x.consensi) }));
+  return { tipo: "anagrafica", soggiorni: [], contatti, doppioni, righe: dati.length, esclusi, illeggibili, giaPresenti: 0, troppoVecchie: 0, colonne: c };
 }
 async function importaPacchetto(file, oggi, esistenti) {
   const soggiorni = [];
+  const contatti = [];
   const esiti = [];
   for (const f of file) {
     const esito = await importaRighe(f.righe, oggi, esistenti, f.casa);
     if (esito.colonne.casa === void 0 && !f.casa) throw new Error(`${f.nome}: manca la colonna \xABStruttura\xBB e non \xE8 indicata la casa`);
     soggiorni.push(...esito.soggiorni);
+    contatti.push(...esito.contatti);
     esiti.push({ nome: f.nome, esito });
   }
-  return { soggiorni, esiti };
+  return { soggiorni, contatti, esiti };
 }
 function riassuntoEsito(nome, e) {
   const x = e.esclusi;
+  if (e.tipo === "anagrafica") {
+    const si = e.contatti.filter((k) => k.consenso === "si").length;
+    const no = e.contatti.filter((k) => k.consenso === "no").length;
+    return `${nome} (anagrafica clienti, senza date): ${e.righe} righe \u2192 ${e.contatti.length} indirizzi` + (e.colonne.consenso !== void 0 ? ` (consenso marketing s\xEC ${si}, no ${no})` : " (colonna del consenso assente)") + ` \xB7 scartate ${x.portale} email dei portali (booking, expedia\u2026), ${x.nonValida} senza email valida, ${x.interna} interne, ${x.minori} minori \xB7 ${e.doppioni} righe con un indirizzo gi\xE0 presente nel file, unite`;
+  }
   return `${nome}: ${e.righe} righe \u2192 ${e.soggiorni.length} importate \xB7 scartate ${x.portale} email dei portali, ${x.nonValida} senza email valida, ${x.interna} interne, ${x.minori} minori, ${e.illeggibili} senza data o casa, ${e.troppoVecchie} oltre 24 mesi \xB7 ${e.giaPresenti} gi\xE0 presenti da La Scatola`;
 }
 
@@ -541,20 +671,23 @@ async function disiscrivi(archivio, emails, oggi) {
   const presenti = new Set(lista.map((d) => d.h));
   const righe = [];
   let soggiorni = archivio.soggiorni;
+  let contatti = archivio.contatti ?? [];
   for (const raw of emails) {
     const email = normalizzaEmail(raw);
     const h = await impronta(email);
     const suoi = soggiorni.filter((s) => s.email === email);
-    const nome = suoi.map((s) => [s.nome, s.cognome].filter(Boolean).join(" ")).find(Boolean) ?? null;
+    const anagrafica = contatti.filter((c) => c.email === email);
+    const nome = [...suoi, ...anagrafica].map((s) => [s.nome, s.cognome].filter(Boolean).join(" ")).find(Boolean) ?? null;
     soggiorni = soggiorni.filter((s) => s.email !== email);
+    contatti = contatti.filter((c) => c.email !== email);
     const gia = presenti.has(h);
     if (!gia) {
       lista.push({ h, dal: oggi });
       presenti.add(h);
     }
-    righe.push({ email, soggiorni: suoi.length, nome, gia });
+    righe.push({ email, soggiorni: suoi.length, anagrafica: anagrafica.length > 0, nome, gia });
   }
-  return { archivio: { ...archivio, soggiorni, disiscritti: lista }, righe };
+  return { archivio: { ...archivio, soggiorni, contatti, disiscritti: lista }, righe };
 }
 async function riattiva(archivio, email) {
   const h = await impronta(email);
@@ -568,15 +701,21 @@ async function pulisci(grezzo) {
   if (!lista.length) return { archivio: { ...archivio, disiscritti: [] }, esclusi: tolti, cancellati: 0 };
   const vietate = new Set(lista.map((d) => d.h));
   const impronte = /* @__PURE__ */ new Map();
-  for (const s of archivio.soggiorni) if (!impronte.has(s.email)) impronte.set(s.email, await impronta(s.email));
+  const contattiPrima = archivio.contatti ?? [];
+  for (const s of [...archivio.soggiorni, ...contattiPrima]) if (!impronte.has(s.email)) impronte.set(s.email, await impronta(s.email));
   const soggiorni = archivio.soggiorni.filter((s) => !vietate.has(impronte.get(s.email)));
-  return { archivio: { ...archivio, soggiorni, disiscritti: lista }, esclusi: tolti, cancellati: archivio.soggiorni.length - soggiorni.length };
+  const contatti = contattiPrima.filter((c) => !vietate.has(impronte.get(c.email)));
+  return {
+    archivio: { ...archivio, soggiorni, contatti, disiscritti: lista },
+    esclusi: tolti,
+    cancellati: archivio.soggiorni.length - soggiorni.length + contattiPrima.length - contatti.length
+  };
 }
 async function soggiorniCancellati(archivio) {
   const vietate = new Set(elencoDisiscritti(archivio).map((d) => d.h));
   if (!vietate.size) return 0;
   let n = 0;
-  for (const s of archivio.soggiorni) if (vietate.has(await impronta(s.email))) n++;
+  for (const s of [...archivio.soggiorni, ...archivio.contatti ?? []]) if (vietate.has(await impronta(s.email))) n++;
   return n;
 }
 
@@ -911,7 +1050,7 @@ function freschezza(list) {
 async function scrivi(grezzo, sgr, fresh, prima) {
   const visti = /* @__PURE__ */ new Set();
   const lista = [...elencoDisiscritti(grezzo), ...prima ? elencoDisiscritti(prima) : []].filter((d) => !visti.has(d.h) && visti.add(d.h));
-  const { archivio, esclusi, cancellati } = await pulisci({ ...grezzo, disiscritti: lista });
+  const { archivio, esclusi, cancellati } = await pulisci({ ...grezzo, disiscritti: lista, contatti: grezzo.contatti ?? prima?.contatti ?? [] });
   if (esclusi > 0) out(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${esclusi}`);
   if (cancellati > 0) out(`RIEPILOGO tolti dallo storico perch\xE9 nella lista di cancellazione: ${cancellati} soggiorni`);
   if (await soggiorniCancellati(archivio)) fail("nello storico resta un indirizzo cancellato dalla newsletter. Non pubblicare.");
@@ -931,14 +1070,16 @@ async function scrivi(grezzo, sgr, fresh, prima) {
 `);
   return envelope;
 }
-function riepilogoOspiti(soggiorni, day2) {
-  const ospiti = ospitiDa(soggiorni, day2);
+function riepilogoOspiti(soggiorni, day2, contatti = []) {
+  const ospiti = ospitiDa(soggiorni, day2, contatti);
   const perCasa = CASE.map((c) => `${c.nome} ${ospiti.filter((o) => o.case.includes(c.key)).length}`).join(" \xB7 ");
   const lingue2 = /* @__PURE__ */ new Map();
   for (const o of ospiti) lingue2.set(o.lingua, (lingue2.get(o.lingua) ?? 0) + 1);
   const topLingue = [...lingue2].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([l, n]) => `${l} ${n}`).join(" \xB7 ");
   out(`RIEPILOGO ospiti unici: ${ospiti.length}, abituali ${ospiti.filter((o) => o.abituale).length} \xB7 ${perCasa}`);
   out(`RIEPILOGO lingue: ${topLingue}`);
+  if (contatti.length)
+    out(`RIEPILOGO anagrafica: ${ospiti.filter((o) => !o.soggiorni.length).length} solo anagrafica \xB7 consenso marketing s\xEC ${ospiti.filter((o) => o.consenso === "si").length}, no ${ospiti.filter((o) => o.consenso === "no").length}, non indicato ${ospiti.filter((o) => o.consenso === null).length}`);
 }
 var riepilogoStorico = (u, importati = 0) => `RIEPILOGO storico: ${u.soggiorni.length} soggiorni (${u.nuovi} nuovi, ${u.aggiornati} aggiornati, ${u.spariti} tolti perch\xE9 spariti da Slope, ${u.scaduti} oltre ${CONSERVAZIONE_MESI} mesi${importati ? `, ${importati} importati in tutto` : ""})`;
 function loadRun() {
@@ -1020,7 +1161,8 @@ async function next() {
     conservazioneMesi: CONSERVAZIONE_MESI,
     soggiorni: u.soggiorni,
     esclusi: run.completo ? esclusi : storico?.archivio.esclusi ?? esclusi,
-    disiscritti: storico?.archivio.disiscritti ?? []
+    disiscritti: storico?.archivio.disiscritti ?? [],
+    contatti: storico?.archivio.contatti ?? []
   };
   const envelope = await scrivi(archivio, run.segreto, freschezza([...guests.freshness, ...res.freshness]), storico?.archivio ?? null);
   out(`RIEPILOGO aggiornamento ${run.completo ? "completo" : "incrementale"}: ${guests.rows.length} soggiorni con email letti${run.completo ? ` dal ${primoInizio}` : ` (fine soggiorno dal ${daIncr})`}, ${res.rows.length} prenotazioni lette`);
@@ -1029,7 +1171,7 @@ async function next() {
   );
   if (senzaPrenotazione) out(`RIEPILOGO ATTENZIONE ${senzaPrenotazione} soggiorni senza prenotazione corrispondente (tenuti, canale ignoto)`);
   out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
-  riepilogoOspiti(u.soggiorni, run.day);
+  riepilogoOspiti(u.soggiorni, run.day, archivio.contatti ?? []);
   out(`RIEPILOGO La Scatola ${envelope.freshness}${envelope.scatola_updated_at ? `, aggiornata alle ${envelope.scatola_updated_at}` : ""} \xB7 chiamate lette ${calls.length}`);
   out(`PRONTO ${FILE} scritto e verificato`);
 }
@@ -1058,12 +1200,13 @@ async function importa(args) {
   }
   const pac = await importaPacchetto(file, day2, storico.archivio.soggiorni).catch((e) => fail(e instanceof Error ? e.message : String(e)));
   for (const e of pac.esiti) out(`RIEPILOGO ${riassuntoEsito(e.nome, e.esito)}`);
-  if (!pac.soggiorni.length) fail("nessun soggiorno importabile nei file indicati. Niente da pubblicare.");
+  if (!pac.soggiorni.length && !pac.contatti.length) fail("nessun soggiorno o cliente importabile nei file indicati. Niente da pubblicare.");
   const u = unisci(storico.archivio.soggiorni, pac.soggiorni, () => false, day2);
-  const archivio = { ...storico.archivio, day: day2, soggiorni: u.soggiorni };
+  const contatti = unisciContatti(storico.archivio.contatti ?? [], pac.contatti);
+  const archivio = { ...storico.archivio, day: day2, soggiorni: u.soggiorni, contatti };
   await scrivi(archivio, sgr, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at }, storico.archivio);
   out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
-  riepilogoOspiti(u.soggiorni, day2);
+  riepilogoOspiti(u.soggiorni, day2, contatti);
   out(`PRONTO ${FILE} scritto e verificato`);
 }
 async function cambia(args) {
@@ -1121,11 +1264,18 @@ async function verify(args) {
     ids.add(s.gsid);
     if (emailEsclusa(s.email)) fail("nello storico c'\xE8 un'email che andava scartata");
   }
+  const idc = /* @__PURE__ */ new Set();
+  for (const k of a.contatti ?? []) {
+    if (!CONTATTO_ID.test(k.id) || !isUuid(k.pid)) fail("identificativi non validi nell'anagrafica importata");
+    if (idc.has(k.id)) fail("cliente doppio nell'anagrafica importata");
+    idc.add(k.id);
+    if (emailEsclusa(k.email)) fail("nell'anagrafica c'\xE8 un'email che andava scartata");
+  }
   if (await soggiorniCancellati(a)) fail("nello storico c'\xE8 un indirizzo cancellato dalla newsletter");
-  const ospiti = ospitiDa(a.soggiorni, env.day);
+  const ospiti = ospitiDa(a.soggiorni, env.day, a.contatti ?? []);
   const imp = a.soggiorni.filter((s) => s.origine === "import").length;
   out(
-    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, ${elencoDisiscritti(a).length} indirizzi cancellati dalla newsletter, scritto ${env.generated_at}`
+    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, ${(a.contatti ?? []).length} clienti da anagrafica (consenso s\xEC ${ospiti.filter((o) => o.consenso === "si").length}), ${elencoDisiscritti(a).length} indirizzi cancellati dalla newsletter, scritto ${env.generated_at}`
   );
 }
 var [cmd, ...rest] = process.argv.slice(2);

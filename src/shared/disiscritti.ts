@@ -29,29 +29,32 @@ export function indirizziDa(testo: string): string[] {
 export interface EsitoCancellazione {
   readonly archivio: Archivio;
   /** Per ogni indirizzo: soggiorni tolti dallo storico e se era già nella lista. */
-  readonly righe: readonly { readonly email: string; readonly soggiorni: number; readonly nome: string | null; readonly gia: boolean }[];
+  readonly righe: readonly { readonly email: string; readonly soggiorni: number; readonly anagrafica: boolean; readonly nome: string | null; readonly gia: boolean }[];
 }
 
 /** Aggiunge gli indirizzi alla lista di cancellazione e toglie dallo storico tutti i loro soggiorni. */
 export async function disiscrivi(archivio: Archivio, emails: readonly string[], oggi: string): Promise<EsitoCancellazione> {
   const lista = [...elencoDisiscritti(archivio)];
   const presenti = new Set(lista.map((d) => d.h));
-  const righe: { email: string; soggiorni: number; nome: string | null; gia: boolean }[] = [];
+  const righe: { email: string; soggiorni: number; anagrafica: boolean; nome: string | null; gia: boolean }[] = [];
   let soggiorni = archivio.soggiorni;
+  let contatti = archivio.contatti ?? [];
   for (const raw of emails) {
     const email = normalizzaEmail(raw);
     const h = await impronta(email);
     const suoi = soggiorni.filter((s) => s.email === email);
-    const nome = suoi.map((s) => [s.nome, s.cognome].filter(Boolean).join(" ")).find(Boolean) ?? null;
+    const anagrafica = contatti.filter((c) => c.email === email);
+    const nome = [...suoi, ...anagrafica].map((s) => [s.nome, s.cognome].filter(Boolean).join(" ")).find(Boolean) ?? null;
     soggiorni = soggiorni.filter((s) => s.email !== email);
+    contatti = contatti.filter((c) => c.email !== email);
     const gia = presenti.has(h);
     if (!gia) {
       lista.push({ h, dal: oggi });
       presenti.add(h);
     }
-    righe.push({ email, soggiorni: suoi.length, nome, gia });
+    righe.push({ email, soggiorni: suoi.length, anagrafica: anagrafica.length > 0, nome, gia });
   }
-  return { archivio: { ...archivio, soggiorni, disiscritti: lista }, righe };
+  return { archivio: { ...archivio, soggiorni, contatti, disiscritti: lista }, righe };
 }
 
 /** Toglie un indirizzo dalla lista (solo se l'ospite ha chiesto di nuovo la newsletter). I soggiorni tolti non tornano. */
@@ -78,16 +81,22 @@ export async function pulisci(grezzo: Archivio): Promise<{ archivio: Archivio; e
   if (!lista.length) return { archivio: { ...archivio, disiscritti: [] }, esclusi: tolti, cancellati: 0 };
   const vietate = new Set(lista.map((d) => d.h));
   const impronte = new Map<string, string>();
-  for (const s of archivio.soggiorni) if (!impronte.has(s.email)) impronte.set(s.email, await impronta(s.email));
+  const contattiPrima = archivio.contatti ?? [];
+  for (const s of [...archivio.soggiorni, ...contattiPrima]) if (!impronte.has(s.email)) impronte.set(s.email, await impronta(s.email));
   const soggiorni = archivio.soggiorni.filter((s) => !vietate.has(impronte.get(s.email)!));
-  return { archivio: { ...archivio, soggiorni, disiscritti: lista }, esclusi: tolti, cancellati: archivio.soggiorni.length - soggiorni.length };
+  const contatti = contattiPrima.filter((c) => !vietate.has(impronte.get(c.email)!));
+  return {
+    archivio: { ...archivio, soggiorni, contatti, disiscritti: lista },
+    esclusi: tolti,
+    cancellati: archivio.soggiorni.length - soggiorni.length + contattiPrima.length - contatti.length,
+  };
 }
 
-/** Quanti soggiorni dello storico appartengono a indirizzi cancellati (deve essere 0). */
+/** Quanti soggiorni o clienti dell'anagrafica appartengono a indirizzi cancellati (deve essere 0). */
 export async function soggiorniCancellati(archivio: Archivio): Promise<number> {
   const vietate = new Set(elencoDisiscritti(archivio).map((d) => d.h));
   if (!vietate.size) return 0;
   let n = 0;
-  for (const s of archivio.soggiorni) if (vietate.has(await impronta(s.email))) n++;
+  for (const s of [...archivio.soggiorni, ...(archivio.contatti ?? [])]) if (vietate.has(await impronta(s.email))) n++;
   return n;
 }

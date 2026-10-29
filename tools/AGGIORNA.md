@@ -76,6 +76,8 @@ Regole:
 - Una riga che corrisponde a un soggiorno già letto da La Scatola (stesso ospite, stessa casa, date che si toccano)
   non si importa: vale il dato di La Scatola. Le altre si aggiungono, anche se recenti.
 - La colonna «Soggiorni» (numero di visite) rende abituale chi ne ha almeno 2.
+- Anagrafica clienti «patrons» (Nome, Cognome, E-mail, Lingua, Aut. e-mail marketing, senza date): un cliente per
+  indirizzo e casa, ID generato `ana-…`, consenso «sì» solo se nessuna riga dello stesso indirizzo dice «no».
 - Stesse esclusioni (qualunque indirizzo con «booking» o «expedia», portali, minori, indirizzi non validi) e niente
   oltre 24 mesi dall'ultima partenza.
 - I soggiorni importati hanno un identificativo generato `imp-…` (mai un ID di Slope) e non vengono tolti

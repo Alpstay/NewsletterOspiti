@@ -25,7 +25,10 @@ export const COLONNE: readonly Colonna[] = [
   { titolo: "Perché abituale", larghezza: 18, tipo: "testo" },
   { titolo: "Cliente dal", larghezza: 12, tipo: "data" },
   { titolo: "Canale ultima prenotazione", larghezza: 16, tipo: "testo" },
+  { titolo: "Consenso marketing", larghezza: 12, tipo: "testo" },
 ];
+
+export const NOMI_CONSENSO = { si: "Sì", no: "No" } as const;
 
 export function riga(o: Ospite, nomi: Nomi): Cella[] {
   return [
@@ -41,11 +44,12 @@ export function riga(o: Ospite, nomi: Nomi): Cella[] {
     o.primo,
     o.ultimo,
     o.prossimo,
-    o.viaggi,
+    o.soggiorni.length ? o.viaggi : null,
     o.abituale ? "Sì" : "No",
     o.motivoAbituale,
     o.clienteDal,
     o.canale ? NOMI_CANALE[o.canale] : null,
+    o.consenso ? NOMI_CONSENSO[o.consenso] : "Non indicato",
   ];
 }
 

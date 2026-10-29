@@ -26,6 +26,7 @@ import { importaPacchetto, mappaColonne, riassuntoEsito } from "../shared/import
 import type { FileImport } from "../shared/importa";
 import {
   APP,
+  CONTATTO_ID,
   CASE,
   CONSERVAZIONE_MESI,
   FILE,
@@ -41,10 +42,11 @@ import {
   romeDay,
   soggiornoDa,
   unisci,
+  unisciContatti,
 } from "../shared/model";
 import { disiscrivi, elencoDisiscritti, indirizziDa, pulisci, riattiva, soggiorniCancellati } from "../shared/disiscritti";
 import type { Unione } from "../shared/model";
-import type { Archivio, Envelope, Esclusi, Freshness, FreshnessStatus, Soggiorno } from "../shared/types";
+import type { Archivio, Contatto, Envelope, Esclusi, Freshness, FreshnessStatus, Soggiorno } from "../shared/types";
 import { leggiTabella } from "../shared/tabella";
 import { inflateRawSync } from "node:zlib";
 import { findTranscript, follow, readCalls } from "./transcript";
@@ -159,7 +161,7 @@ async function scrivi(
   // La lista di cancellazione non si perde mai: si unisce sempre a quella del file precedente.
   const visti = new Set<string>();
   const lista = [...elencoDisiscritti(grezzo), ...(prima ? elencoDisiscritti(prima) : [])].filter((d) => !visti.has(d.h) && visti.add(d.h));
-  const { archivio, esclusi, cancellati } = await pulisci({ ...grezzo, disiscritti: lista });
+  const { archivio, esclusi, cancellati } = await pulisci({ ...grezzo, disiscritti: lista, contatti: grezzo.contatti ?? prima?.contatti ?? [] });
   if (esclusi > 0) out(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${esclusi}`);
   if (cancellati > 0) out(`RIEPILOGO tolti dallo storico perché nella lista di cancellazione: ${cancellati} soggiorni`);
   if (await soggiorniCancellati(archivio)) fail("nello storico resta un indirizzo cancellato dalla newsletter. Non pubblicare.");
@@ -179,14 +181,16 @@ async function scrivi(
   return envelope;
 }
 
-function riepilogoOspiti(soggiorni: readonly Soggiorno[], day: string): void {
-  const ospiti = ospitiDa(soggiorni, day);
+function riepilogoOspiti(soggiorni: readonly Soggiorno[], day: string, contatti: readonly Contatto[] = []): void {
+  const ospiti = ospitiDa(soggiorni, day, contatti);
   const perCasa = CASE.map((c) => `${c.nome} ${ospiti.filter((o) => o.case.includes(c.key)).length}`).join(" · ");
   const lingue = new Map<string, number>();
   for (const o of ospiti) lingue.set(o.lingua, (lingue.get(o.lingua) ?? 0) + 1);
   const topLingue = [...lingue].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([l, n]) => `${l} ${n}`).join(" · ");
   out(`RIEPILOGO ospiti unici: ${ospiti.length}, abituali ${ospiti.filter((o) => o.abituale).length} · ${perCasa}`);
   out(`RIEPILOGO lingue: ${topLingue}`);
+  if (contatti.length)
+    out(`RIEPILOGO anagrafica: ${ospiti.filter((o) => !o.soggiorni.length).length} solo anagrafica · consenso marketing sì ${ospiti.filter((o) => o.consenso === "si").length}, no ${ospiti.filter((o) => o.consenso === "no").length}, non indicato ${ospiti.filter((o) => o.consenso === null).length}`);
 }
 
 const riepilogoStorico = (u: Unione, importati = 0): string =>
@@ -291,6 +295,7 @@ async function next(): Promise<void> {
     soggiorni: u.soggiorni,
     esclusi: run.completo ? esclusi : (storico?.archivio.esclusi ?? esclusi),
     disiscritti: storico?.archivio.disiscritti ?? [],
+    contatti: storico?.archivio.contatti ?? [],
   };
   const envelope = await scrivi(archivio, run.segreto, freschezza([...guests.freshness, ...res.freshness]), storico?.archivio ?? null);
 
@@ -300,7 +305,7 @@ async function next(): Promise<void> {
   );
   if (senzaPrenotazione) out(`RIEPILOGO ATTENZIONE ${senzaPrenotazione} soggiorni senza prenotazione corrispondente (tenuti, canale ignoto)`);
   out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
-  riepilogoOspiti(u.soggiorni, run.day);
+  riepilogoOspiti(u.soggiorni, run.day, archivio.contatti ?? []);
   out(`RIEPILOGO La Scatola ${envelope.freshness}${envelope.scatola_updated_at ? `, aggiornata alle ${envelope.scatola_updated_at}` : ""} · chiamate lette ${calls.length}`);
   out(`PRONTO ${FILE} scritto e verificato`);
 }
@@ -330,13 +335,14 @@ async function importa(args: string[]): Promise<void> {
   }
   const pac = await importaPacchetto(file, day, storico.archivio.soggiorni).catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));
   for (const e of pac.esiti) out(`RIEPILOGO ${riassuntoEsito(e.nome, e.esito)}`);
-  if (!pac.soggiorni.length) fail("nessun soggiorno importabile nei file indicati. Niente da pubblicare.");
+  if (!pac.soggiorni.length && !pac.contatti.length) fail("nessun soggiorno o cliente importabile nei file indicati. Niente da pubblicare.");
   // L'importazione non toglie nulla: nessun soggiorno è «coperto» dalla lettura.
   const u = unisci(storico.archivio.soggiorni, pac.soggiorni, () => false, day);
-  const archivio: Archivio = { ...storico.archivio, day, soggiorni: u.soggiorni };
+  const contatti = unisciContatti(storico.archivio.contatti ?? [], pac.contatti);
+  const archivio: Archivio = { ...storico.archivio, day, soggiorni: u.soggiorni, contatti };
   await scrivi(archivio, sgr, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at }, storico.archivio);
   out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
-  riepilogoOspiti(u.soggiorni, day);
+  riepilogoOspiti(u.soggiorni, day, contatti);
   out(`PRONTO ${FILE} scritto e verificato`);
 }
 
@@ -399,11 +405,18 @@ async function verify(args: string[]): Promise<void> {
     ids.add(s.gsid);
     if (emailEsclusa(s.email)) fail("nello storico c'è un'email che andava scartata");
   }
+  const idc = new Set<string>();
+  for (const k of a.contatti ?? []) {
+    if (!CONTATTO_ID.test(k.id) || !isUuid(k.pid)) fail("identificativi non validi nell'anagrafica importata");
+    if (idc.has(k.id)) fail("cliente doppio nell'anagrafica importata");
+    idc.add(k.id);
+    if (emailEsclusa(k.email)) fail("nell'anagrafica c'è un'email che andava scartata");
+  }
   if (await soggiorniCancellati(a)) fail("nello storico c'è un indirizzo cancellato dalla newsletter");
-  const ospiti = ospitiDa(a.soggiorni, env.day);
+  const ospiti = ospitiDa(a.soggiorni, env.day, a.contatti ?? []);
   const imp = a.soggiorni.filter((s) => s.origine === "import").length;
   out(
-    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, ${elencoDisiscritti(a).length} indirizzi cancellati dalla newsletter, scritto ${env.generated_at}`,
+    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, ${(a.contatti ?? []).length} clienti da anagrafica (consenso sì ${ospiti.filter((o) => o.consenso === "si").length}), ${elencoDisiscritti(a).length} indirizzi cancellati dalla newsletter, scritto ${env.generated_at}`,
   );
 }
 

@@ -1,7 +1,7 @@
 // Regole di dominio: dalle righe di La Scatola allo storico, e dallo storico agli ospiti unici.
 // Funzioni pure, usate sia dal programma di aggiornamento sia dalla pagina.
 
-import type { Archivio, Canale, Casa, CasaKey, Envelope, Esclusi, Ospite, Soggiorno } from "./types";
+import type { Archivio, Canale, Consenso, Contatto, Casa, CasaKey, Envelope, Esclusi, Ospite, Soggiorno } from "./types";
 
 export const APP = "newsletter-ospiti" as const;
 export const FILE = "ospiti.json";
@@ -286,7 +286,30 @@ export function contaViaggi(sogg: readonly { dal: string; al: string }[]): numbe
   return n;
 }
 
-export function ospitiDa(soggiorni: readonly Soggiorno[], oggi: string): Ospite[] {
+/** Consenso di più righe o case: «sì» solo se nessuna dice «no» (in caso di dubbio vale il no). */
+export function consensoUnito(valori: readonly (Consenso | null)[]): Consenso | null {
+  const noti = valori.filter((v): v is Consenso => v !== null);
+  return noti.length ? (noti.every((v) => v === "si") ? "si" : "no") : null;
+}
+
+export const CONTATTO_ID = /^ana-[0-9a-f]{16}$/;
+
+/** Unisce i clienti dell'anagrafica: la nuova importazione sostituisce quella precedente per lo stesso indirizzo e casa. */
+export function unisciContatti(prev: readonly Contatto[], nuovi: readonly Contatto[]): Contatto[] {
+  const m = new Map(prev.map((c) => [c.id, c]));
+  for (const c of nuovi) m.set(c.id, c);
+  return [...m.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+export function ospitiDa(soggiorni: readonly Soggiorno[], oggi: string, contatti: readonly Contatto[] = []): Ospite[] {
+  const anagrafica = new Map<string, Contatto[]>();
+  for (const c of contatti) {
+    if (c.maggiorenneDal && c.maggiorenneDal > oggi) continue;
+    if (emailEsclusa(c.email)) continue;
+    const l = anagrafica.get(c.email);
+    if (l) l.push(c);
+    else anagrafica.set(c.email, [c]);
+  }
   const perEmail = new Map<string, Soggiorno[]>();
   for (const s of soggiorni) {
     if (s.maggiorenneDal && s.maggiorenneDal > oggi) continue;
@@ -297,15 +320,46 @@ export function ospitiDa(soggiorni: readonly Soggiorno[], oggi: string): Ospite[
     else perEmail.set(s.email, [s]);
   }
   const out: Ospite[] = [];
+  // Clienti della sola anagrafica (nessun soggiorno conosciuto): una riga per indirizzo, senza date.
+  for (const [email, ana] of anagrafica) {
+    if (perEmail.has(email)) continue;
+    const nazione = ana.find((c) => c.nazione)?.nazione ?? null;
+    const linguaSlope = ana.find((c) => c.linguaSlope && c.linguaSlope !== "it")?.linguaSlope ?? ana.find((c) => c.linguaSlope)?.linguaSlope ?? null;
+    const { lingua, dedotta } = linguaNewsletter(linguaSlope, nazione);
+    const caseSet = new Set(ana.map((c) => casaDa(c.pid)));
+    out.push({
+      email,
+      nome: ana.find((c) => c.nome)?.nome ?? "",
+      cognome: ana.find((c) => c.cognome)?.cognome ?? "",
+      lingua,
+      linguaDedotta: dedotta,
+      nazione,
+      case: CASE.map((c) => c.key).filter((k) => caseSet.has(k)),
+      primo: null,
+      ultimo: null,
+      prossimo: null,
+      viaggi: 0,
+      clienteDal: null,
+      abituale: false,
+      motivoAbituale: null,
+      canale: null,
+      consenso: consensoUnito(ana.map((c) => c.consenso)),
+      soggiorni: [],
+    });
+  }
   for (const [email, list] of perEmail) {
+    const ana = anagrafica.get(email) ?? [];
     list.sort((a, b) => a.dal.localeCompare(b.dal) || a.gsid.localeCompare(b.gsid));
     const recente = list[list.length - 1];
-    const nome = [...list].reverse().find((s) => s.nome)?.nome ?? "";
-    const cognome = [...list].reverse().find((s) => s.cognome)?.cognome ?? "";
-    const nazione = [...list].reverse().find((s) => s.nazione)?.nazione ?? null;
-    const linguaSlope = [...list].reverse().find((s) => s.linguaSlope && s.linguaSlope !== "it")?.linguaSlope ?? recente.linguaSlope;
+    const nome = [...list].reverse().find((s) => s.nome)?.nome ?? ana.find((c) => c.nome)?.nome ?? "";
+    const cognome = [...list].reverse().find((s) => s.cognome)?.cognome ?? ana.find((c) => c.cognome)?.cognome ?? "";
+    const nazione = [...list].reverse().find((s) => s.nazione)?.nazione ?? ana.find((c) => c.nazione)?.nazione ?? null;
+    const linguaSlope =
+      [...list].reverse().find((s) => s.linguaSlope && s.linguaSlope !== "it")?.linguaSlope ??
+      ana.find((c) => c.linguaSlope && c.linguaSlope !== "it")?.linguaSlope ??
+      recente.linguaSlope;
     const { lingua, dedotta } = linguaNewsletter(linguaSlope, nazione);
-    const caseSet = new Set(list.map((s) => casaDa(s.pid)).filter((k): k is CasaKey => k !== null));
+    const caseSet = new Set([...list.map((s) => casaDa(s.pid)), ...ana.map((c) => casaDa(c.pid))].filter((k): k is CasaKey => k !== null));
     const passati = list.filter((s) => s.dal <= oggi);
     const futuri = list.filter((s) => s.dal > oggi);
     const viaggi = Math.max(contaViaggi(list), ...list.map((s) => s.soggiorniDichiarati ?? 1));
@@ -331,6 +385,7 @@ export function ospitiDa(soggiorni: readonly Soggiorno[], oggi: string): Ospite[
       abituale,
       motivoAbituale: viaggi >= 2 ? `${viaggi} soggiorni` : clienteNoto ? `cliente dal ${meseAnno(privacy!)}` : null,
       canale: recente.canale,
+      consenso: consensoUnito(ana.map((c) => c.consenso)),
       soggiorni: list.map((s) => ({ casa: casaDa(s.pid), dal: s.dal, al: s.al })),
     });
   }
@@ -355,6 +410,10 @@ export function envelopeSenzaDatiInChiaro(e: Envelope): boolean {
 /** Toglie dallo storico i soggiorni il cui indirizzo non supera le regole di esclusione attuali. Gli ID restano intatti. */
 export function senzaEsclusi(archivio: Archivio): { archivio: Archivio; tolti: number } {
   const soggiorni = archivio.soggiorni.filter((s) => emailEsclusa(s.email) === null);
-  const tolti = archivio.soggiorni.length - soggiorni.length;
-  return tolti === 0 ? { archivio, tolti } : { archivio: { ...archivio, soggiorni }, tolti };
+  // Anagrafica: stesse esclusioni, e si conserva per i mesi previsti dall'ultima importazione che conteneva il cliente.
+  const limite = addMonths(archivio.day, -archivio.conservazioneMesi);
+  const prima = archivio.contatti ?? [];
+  const contatti = prima.filter((c) => emailEsclusa(c.email) === null && c.importatoIl >= limite);
+  const tolti = archivio.soggiorni.length - soggiorni.length + prima.length - contatti.length;
+  return tolti === 0 ? { archivio, tolti } : { archivio: { ...archivio, soggiorni, contatti }, tolti };
 }

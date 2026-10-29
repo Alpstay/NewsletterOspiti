@@ -15,7 +15,11 @@ scaricare in Excel per la newsletter. Online su https://alpstay.github.io/Newsle
 - **Solo i dati nuovi**: di notte si rileggono soltanto i soggiorni che finiscono dagli ultimi 7 giorni in
   poi (~4 chiamate); il 1° di ogni mese una lettura completa fa da rete di sicurezza.
 - **Importazione**: il pacchetto clienti di Slope (un file Excel per casa: Hartmann, Acadia, Saslong) si aggiunge
-  dalla pagina o con `node tools/ospiti.mjs importa` (dettagli in `tools/AGGIORNA.md`).
+  dalla pagina o con `node tools/ospiti.mjs importa` (dettagli in `tools/AGGIORNA.md`). Va bene anche l'anagrafica
+  clienti «patrons» senza date: ogni indirizzo diventa un cliente della casa del file, con il consenso marketing
+  («Aut. e-mail marketing»: in caso di righe discordi vale «no»), e si completa con le date quando ha soggiorni in
+  La Scatola. Telefono, documenti, codice fiscale e residenza non vengono letti né conservati; l'anagrafica non
+  reimportata da 24 mesi si cancella.
 - **Pagina**: decifra nel browser; la Content-Security-Policy permette di scaricare dati solo dal
   proprio sito, quindi email e password non possono partire verso altri indirizzi. L'Excel si genera
   in locale.

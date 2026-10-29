@@ -4,6 +4,8 @@ import type { Canale, CasaKey, Ospite } from "../shared/types";
 
 export type Abituali = "tutti" | "si" | "no";
 export type CanaleFiltro = Canale | "ignoto";
+/** Consenso al marketing: «nd» = non indicato (ospiti noti solo da La Scatola). */
+export type ConsensoFiltro = "tutti" | "si" | "no" | "nd";
 
 export interface Filtri {
   readonly case: ReadonlySet<CasaKey>;
@@ -14,6 +16,7 @@ export interface Filtri {
   readonly a: string | null;
   readonly abituali: Abituali;
   readonly canali: ReadonlySet<CanaleFiltro>;
+  readonly consenso: ConsensoFiltro;
   /** Ricerca libera su nome, cognome ed email. */
   readonly testo: string;
 }
@@ -26,6 +29,7 @@ export const filtriVuoti = (): Filtri => ({
   a: null,
   abituali: "tutti",
   canali: new Set(),
+  consenso: "tutti",
   testo: "",
 });
 
@@ -40,7 +44,11 @@ export function filtra(ospiti: readonly Ospite[], f: Filtri): Ospite[] {
     if (f.abituali === "si" && !o.abituale) return false;
     if (f.abituali === "no" && o.abituale) return false;
     if (f.canali.size && !f.canali.has(o.canale ?? "ignoto")) return false;
-    if (f.case.size || f.da || f.a) {
+    if (f.consenso !== "tutti" && (o.consenso ?? "nd") !== f.consenso) return false;
+    if (f.case.size && !f.da && !f.a && !o.soggiorni.length) {
+      // Cliente della sola anagrafica: conta la casa del file importato.
+      if (!o.case.some((c) => f.case.has(c))) return false;
+    } else if (f.case.size || f.da || f.a) {
       const hit = o.soggiorni.some(
         (s) => (!f.case.size || (s.casa !== null && f.case.has(s.casa))) && (!f.da || s.al >= f.da) && (!f.a || s.dal <= f.a),
       );
@@ -71,8 +79,8 @@ export interface Nomi {
   nazione(code: string | null): string;
 }
 
-/** Data di riferimento per l'ordinamento: il soggiorno più recente, compreso un arrivo futuro. */
-export const dataRiferimento = (o: Ospite): string => o.soggiorni.reduce((m, s) => (s.dal > m ? s.dal : m), o.primo);
+/** Data di riferimento per l'ordinamento: il soggiorno più recente, compreso un arrivo futuro ("" se non ci sono date). */
+export const dataRiferimento = (o: Ospite): string => o.soggiorni.reduce((m, s) => (s.dal > m ? s.dal : m), o.primo ?? "");
 
 export function ordina(ospiti: readonly Ospite[], ordini: readonly Ordine[], nomi: Nomi): Ospite[] {
   const cmp = (a: Ospite, b: Ospite, o: Ordine): number => {

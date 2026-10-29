@@ -23,6 +23,7 @@ const O = (email: string, o: Partial<Ospite> = {}): Ospite => ({
   abituale: false,
   motivoAbituale: null,
   canale: "diretto",
+  consenso: null,
   soggiorni: [{ casa: "saslong", dal: "2026-02-01", al: "2026-02-04" }],
   ...o,
 });
@@ -45,6 +46,12 @@ eq(filtra(lista, F({ case: new Set(["saslong"]), da: "2026-07-05", a: "2026-07-3
 eq(filtra(lista, F({ nazioni: new Set([""]) })).map((o) => o.email), ["d@x.it"], "senza nazione");
 eq(filtra(lista, F({ canali: new Set(["portale"]) })).map((o) => o.email), ["c@x.it"], "filtro canale");
 eq(filtra([O("z@x.it", { nome: "Jürgen", cognome: "Müller" })], F({ testo: "muller" })).length, 1, "ricerca senza accenti");
+const anag = O("g@x.it", { case: ["acadia"], soggiorni: [], primo: null, ultimo: null, viaggi: 0, consenso: "si" });
+eq(filtra([...lista, anag], F({ case: new Set(["acadia"]) })).map((o) => o.email), ["c@x.it", "g@x.it"], "casa: vale anche per i clienti della sola anagrafica");
+eq(filtra([...lista, anag], F({ case: new Set(["acadia"]), da: "2026-01-01", a: "2026-12-31" })).map((o) => o.email), ["c@x.it"], "con un periodo i clienti senza date restano fuori");
+eq(filtra([...lista, anag], F({ consenso: "si" })).map((o) => o.email), ["g@x.it"], "filtro consenso sì");
+eq(filtra([...lista, anag], F({ consenso: "nd" })).length, 5, "filtro consenso non indicato");
+eq(ordina([anag, ...lista], ORDINE_PREDEFINITO, nomi).length, 6, "ordinamento con un cliente senza date");
 
 eq(
   ordina(lista, ORDINE_PREDEFINITO, nomi).map((o) => o.email),

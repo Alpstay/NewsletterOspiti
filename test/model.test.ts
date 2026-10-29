@@ -1,5 +1,6 @@
 import { aadFor, decryptJson, encryptJson } from "../src/shared/crypto";
 import { addMonths, capitalizza, contaViaggi, emailEsclusa, linguaNewsletter, ospitiDa, prenotazioniDa, soggiornoDa, unisci } from "../src/shared/model";
+import { importaRighe, mappaColonne } from "../src/shared/importa";
 import { cancellatoIl, disiscrivi, impronta, indirizziDa, pulisci, riattiva, soggiorniCancellati } from "../src/shared/disiscritti";
 import type { Archivio, Soggiorno } from "../src/shared/types";
 import { eq, fine, ok } from "./assert";
@@ -183,5 +184,34 @@ const pul = await pulisci(ritorno);
 eq([pul.cancellati, pul.archivio.soggiorni.length, await soggiorniCancellati(pul.archivio)], [1, 1, 0], "chi si è cancellato non rientra");
 const ria = await riattiva(pul.archivio, "anna@x.it");
 eq([ria.trovato, ria.archivio.disiscritti?.length], [true, 1], "riattivazione di un solo indirizzo");
+
+// ── anagrafica clienti di Slope («patrons»): senza date, con consenso ──
+const PAT = [
+  ["Nome", "Cognome", "Data di nascita", "Codice fiscale", "Numero telefonico", "E-mail", "Aut. e-mail marketing", "Nazione", "Lingua", "Tag"],
+  ["anna", "neri", "1980-02-03", "XXXXXX", "+39000", "Anna@X.it", "sì", "", "it", ""],
+  ["Anna", "Neri", "", "", "", "anna@x.it", "sì", "", "it", ""],
+  ["Carl", "Weiss", "", "", "", "carl@y.de", "sì", "", "de", ""],
+  ["Carl", "Weiss", "", "", "", "carl@y.de", "no", "", "de", ""],
+  ["Bimbo", "Rossi", "2015-05-05", "", "", "bimbo@x.it", "sì", "", "it", ""],
+  ["Mario", "Bianchi", "", "", "", "mario.booking@gmail.com", "sì", "", "it", ""],
+  ["Eva", "Ricci", "", "", "", "eva@z.it", "no", "", "en", ""],
+  ["Senza", "Mail", "", "", "", "", "no", "", "it", ""],
+];
+eq(mappaColonne(PAT)?.tipo, "anagrafica", "file patrons riconosciuto come anagrafica");
+const ana = await importaRighe(PAT, OGGI, [], ACADIA);
+eq(ana.contatti.map((c) => [c.email, c.consenso]).sort(), [["anna@x.it", "si"], ["carl@y.de", "no"], ["eva@z.it", "no"]], "un contatto per indirizzo; consenso discorde → no");
+eq([ana.doppioni, ana.esclusi.minori, ana.esclusi.portale, ana.esclusi.nonValida], [2, 1, 1, 1], "doppioni uniti, minori, booking e righe senza email scartati");
+ok(ana.contatti.every((c) => /^ana-[0-9a-f]{16}$/.test(c.id) && c.pid === ACADIA), "ID generati «ana-…» e casa del file");
+ok(!JSON.stringify(ana.contatti).includes("+39") && !JSON.stringify(ana.contatti).includes("1980"), "telefono e data di nascita non si conservano");
+eq((await importaRighe(PAT, OGGI, [], ACADIA)).contatti.map((c) => c.id), ana.contatti.map((c) => c.id), "reimportare dà gli stessi ID (nessun doppione)");
+const conAna = ospitiDa([S("eeeeeeee-0000-4000-8000-000000000001", { email: "anna@x.it", pid: SASLONG, linguaSlope: "it", nazione: "IT" })], OGGI, ana.contatti);
+const anna = conAna.find((o) => o.email === "anna@x.it")!;
+eq([conAna.length, anna.consenso, anna.case, anna.soggiorni.length], [3, "si", ["acadia", "saslong"], 1], "anagrafica e La Scatola si completano sullo stesso indirizzo");
+const eva = conAna.find((o) => o.email === "eva@z.it")!;
+eq([eva.primo, eva.viaggi, eva.abituale, eva.lingua, eva.case], [null, 0, false, "en", ["acadia"]], "cliente della sola anagrafica: senza date");
+const anaVecchia: Archivio = { ...arch, soggiorni: [], contatti: ana.contatti.map((c) => ({ ...c, importatoIl: "2024-01-01" })) };
+eq((await pulisci(anaVecchia)).archivio.contatti?.length, 0, "anagrafica non più reimportata da oltre 24 mesi: cancellata");
+const canc = await disiscrivi({ ...arch, contatti: ana.contatti }, ["eva@z.it"], OGGI);
+eq([canc.righe[0].anagrafica, canc.archivio.contatti?.some((c) => c.email === "eva@z.it")], [true, false], "la cancellazione toglie anche dall'anagrafica");
 
 fine("modello");

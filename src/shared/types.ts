@@ -66,6 +66,29 @@ export interface Soggiorno {
   readonly soggiorniDichiarati?: number;
 }
 
+/** Consenso al marketing via email, dall'anagrafica clienti di Slope («Aut. e-mail marketing»). */
+export type Consenso = "si" | "no";
+
+/**
+ * Un cliente dell'anagrafica di Slope (esportazione «patrons»): ha email e lingua ma nessuna data di soggiorno.
+ * Uno per indirizzo e casa. L'ID «ana-…» è generato dall'importazione, mai un ID di Slope.
+ */
+export interface Contatto {
+  readonly id: string;
+  /** property_id della casa del file importato, copiato identico. */
+  readonly pid: string;
+  readonly email: string;
+  readonly nome: string;
+  readonly cognome: string;
+  readonly linguaSlope: string | null;
+  readonly nazione: string | null;
+  /** null se il file non ha la colonna del consenso. */
+  readonly consenso: Consenso | null;
+  readonly maggiorenneDal: string | null;
+  /** Giorno dell'ultima importazione che lo conteneva: si conserva per 24 mesi da qui. */
+  readonly importatoIl: string;
+}
+
 /** Quante righe di La Scatola non sono entrate nello storico, e perché. */
 export interface Esclusi {
   /** Indirizzi mascherati dei portali (Booking, Expedia, Airbnb, …). */
@@ -98,6 +121,8 @@ export interface Archivio {
    * reinserirli mai più, né dall'aggiornamento notturno né da un'importazione.
    */
   readonly disiscritti?: readonly Disiscritto[];
+  /** Clienti dell'anagrafica di Slope senza date di soggiorno (importazione «patrons»). */
+  readonly contatti?: readonly Contatto[];
 }
 
 export interface Disiscritto {
@@ -138,15 +163,17 @@ export interface Ospite {
   readonly linguaDedotta: boolean;
   readonly nazione: string | null;
   readonly case: readonly CasaKey[];
-  /** Primo arrivo conosciuto. */
-  readonly primo: string;
+  /** Primo arrivo conosciuto (null per i clienti della sola anagrafica, senza date). */
+  readonly primo: string | null;
   /** Ultimo arrivo già avvenuto (≤ oggi), null se l'ospite deve ancora arrivare. */
   readonly ultimo: string | null;
   /** Prossimo arrivo (> oggi), null se non ce ne sono. */
   readonly prossimo: string | null;
   /** Soggiorni distinti: soggiorni attaccati o sovrapposti (anche in case diverse) contano come uno. */
   readonly viaggi: number;
-  readonly clienteDal: string;
+  readonly clienteDal: string | null;
+  /** Consenso al marketing dall'anagrafica di Slope; null = non indicato. */
+  readonly consenso: Consenso | null;
   readonly abituale: boolean;
   readonly motivoAbituale: string | null;
   /** Canale della prenotazione più recente. */
