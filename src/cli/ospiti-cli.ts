@@ -42,6 +42,7 @@ import {
   soggiornoDa,
   unisci,
 } from "../shared/model";
+import { senzaEsclusi } from "../shared/model";
 import type { Unione } from "../shared/model";
 import type { Archivio, Envelope, Esclusi, Freshness, FreshnessStatus, Soggiorno } from "../shared/types";
 import { leggiTabella } from "../shared/tabella";
@@ -149,7 +150,9 @@ function freschezza(list: readonly Freshness[]): { status: FreshnessStatus; upda
 }
 
 /** Cifra, ricontrolla e scrive ospiti.json. */
-async function scrivi(archivio: Archivio, sgr: string, fresh: { status: FreshnessStatus; updatedAt: string | null }): Promise<Envelope> {
+async function scrivi(grezzo: Archivio, sgr: string, fresh: { status: FreshnessStatus; updatedAt: string | null }): Promise<Envelope> {
+  const { archivio, tolti } = senzaEsclusi(grezzo);
+  if (tolti > 0) console.log(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${tolti}`);
   const envelope: Envelope = {
     format: 2,
     app: APP,

@@ -17,7 +17,10 @@ eq(emailEsclusa("mario rossi@gmail.com"), "nonValida", "spazio");
 eq(emailEsclusa("mario@gmail"), "nonValida", "senza dominio di primo livello");
 eq(emailEsclusa("mario.rossi@gmail.com"), null, "valida");
 eq(emailEsclusa("123456789@qq.com"), null, "numerica valida");
-eq(emailEsclusa("booking@hotelbooking.com.example"), null, "non confondere domini simili");
+eq(emailEsclusa("mario.booking@gmail.com"), "portale", "«booking» nel nome dell'indirizzo");
+eq(emailEsclusa("info@hotelbooking.it"), "portale", "«booking» nel dominio");
+eq(emailEsclusa("Res.EXPEDIA@outlook.com".toLowerCase()), "portale", "«expedia» in qualunque punto");
+eq(emailEsclusa("bookkeeping@studio.it"), null, "parole simili non escluse");
 
 // ── nomi ──
 eq(capitalizza("MEILIN ZHOU"), "Meilin Zhou", "tutto maiuscolo");
@@ -112,6 +115,10 @@ eq(
 );
 eq([u.nuovi, u.aggiornati, u.spariti, u.scaduti], [1, 1, 1, 1], "conteggi dell'unione");
 eq(u.soggiorni.find((s) => s.gsid.endsWith("4"))?.nome, "Anna", "vale il dato di oggi");
+
+const sporco = unisci([S("cccccccc-0000-4000-8000-000000000009", { dal: "2026-01-10", al: "2026-01-12", email: "x.booking@gmail.com" })], [], () => false, OGGI);
+eq(sporco.soggiorni.length, 0, "lo storico già salvato perde gli indirizzi che contengono booking o expedia");
+eq(ospitiDa([S("cccccccc-0000-4000-8000-000000000010", { email: "expedia.fan@gmail.com" })], OGGI).length, 0, "e la pagina non li mostra");
 
 // ── viaggi e abituali ──
 eq(contaViaggi([{ dal: "2026-01-01", al: "2026-01-04" }, { dal: "2026-01-04", al: "2026-01-06" }]), 1, "cambio casa nello stesso viaggio = 1");

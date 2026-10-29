@@ -76,7 +76,8 @@ Regole:
 - Una riga che corrisponde a un soggiorno già letto da La Scatola (stesso ospite, stessa casa, date che si toccano)
   non si importa: vale il dato di La Scatola. Le altre si aggiungono, anche se recenti.
 - La colonna «Soggiorni» (numero di visite) rende abituale chi ne ha almeno 2.
-- Stesse esclusioni (portali, minori, indirizzi non validi) e niente oltre 24 mesi dall'ultima partenza.
+- Stesse esclusioni (qualunque indirizzo con «booking» o «expedia», portali, minori, indirizzi non validi) e niente
+  oltre 24 mesi dall'ultima partenza.
 - I soggiorni importati hanno un identificativo generato `imp-…` (mai un ID di Slope) e non vengono tolti
   dall'aggiornamento notturno. Reimportare gli stessi file non crea doppioni.
 - I file esportati contengono dati personali: **non si aggiungono mai al repository** (`.gitignore` li esclude).

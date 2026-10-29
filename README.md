@@ -34,8 +34,10 @@ scaricare in Excel per la newsletter. Online su https://alpstay.github.io/Newsle
 
 ## Regole sui dati
 
-- Esclusi automaticamente: indirizzi mascherati dei portali (Booking, Expedia, Airbnb…), indirizzi non
-  validi o interni AlpStay, minorenni, prenotazioni cancellate o in opzione.
+- Esclusi automaticamente: ogni indirizzo che contiene «booking» o «expedia» in qualunque punto (nome o
+  dominio), gli indirizzi mascherati degli altri portali (Airbnb, Agoda…), indirizzi non validi o interni
+  AlpStay, minorenni, prenotazioni cancellate o in opzione. Le regole valgono anche sullo storico già salvato:
+  a ogni scrittura chi non le supera più viene tolto.
 - Conservati solo nome, cognome, email, lingua, cittadinanza, date dei soggiorni, casa, canale e data
   dell'informativa privacy. Niente telefono, documento, data di nascita o residenza.
 - Gli ID di Slope si copiano identici: il programma rifiuta un ID che non abbia la forma di un UUID.

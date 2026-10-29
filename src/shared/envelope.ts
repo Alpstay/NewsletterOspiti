@@ -1,10 +1,11 @@
 // Costruzione di ospiti.json (busta in chiaro + storico cifrato), uguale per il programma e per la pagina.
 
 import { aadFor, decryptJson, encryptJson } from "./crypto";
-import { APP, envelopeSenzaDatiInChiaro } from "./model";
+import { APP, envelopeSenzaDatiInChiaro, senzaEsclusi } from "./model";
 import type { Archivio, Envelope, FreshnessStatus } from "./types";
 
-export async function cifraArchivio(archivio: Archivio, sgr: string, freshness: FreshnessStatus, scatolaUpdatedAt: string | null): Promise<Envelope> {
+export async function cifraArchivio(grezzo: Archivio, sgr: string, freshness: FreshnessStatus, scatolaUpdatedAt: string | null): Promise<Envelope> {
+  const { archivio } = senzaEsclusi(grezzo);
   const envelope: Envelope = {
     format: 2,
     app: APP,

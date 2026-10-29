@@ -1,7 +1,7 @@
 // Regole di dominio: dalle righe di La Scatola allo storico, e dallo storico agli ospiti unici.
 // Funzioni pure, usate sia dal programma di aggiornamento sia dalla pagina.
 
-import type { Canale, Casa, CasaKey, Envelope, Esclusi, Ospite, Soggiorno } from "./types";
+import type { Archivio, Canale, Casa, CasaKey, Envelope, Esclusi, Ospite, Soggiorno } from "./types";
 
 export const APP = "newsletter-ospiti" as const;
 export const FILE = "ospiti.json";
@@ -65,10 +65,14 @@ export const normalizzaEmail = (raw: string): string => raw.trim().replace(/^mai
 
 export type MotivoEmail = "portale" | "nonValida" | "interna";
 
+/** Parole che, in qualunque punto dell'indirizzo (nome o dominio), escludono l'email: indirizzi legati ai portali. */
+export const PAROLE_PORTALE: readonly string[] = ["booking", "expedia"];
+
 export function emailEsclusa(email: string): MotivoEmail | null {
   if (!EMAIL.test(email)) return "nonValida";
   const [local, domain] = email.split("@");
   if (SEGNAPOSTO.test(local)) return "nonValida";
+  if (PAROLE_PORTALE.some((p) => email.includes(p))) return "portale";
   if (PORTALI.some((r) => r.test(domain))) return "portale";
   if (INTERNI.some((r) => r.test(domain))) return "interna";
   return null;
@@ -250,6 +254,8 @@ export function unisci(
     else nuovi++;
     out.set(s.gsid, s);
   }
+  // Chi non supera più le regole di esclusione attuali (es. parole «booking», «expedia») esce dallo storico.
+  for (const [k, s] of out) if (emailEsclusa(s.email)) out.delete(k);
   const limite = addMonths(oggi, -mesi);
   let scaduti = 0;
   for (const [k, s] of out) {
@@ -284,6 +290,8 @@ export function ospitiDa(soggiorni: readonly Soggiorno[], oggi: string): Ospite[
   const perEmail = new Map<string, Soggiorno[]>();
   for (const s of soggiorni) {
     if (s.maggiorenneDal && s.maggiorenneDal > oggi) continue;
+    // Le regole di esclusione valgono anche sullo storico già salvato (possono diventare più severe nel tempo).
+    if (emailEsclusa(s.email)) continue;
     const l = perEmail.get(s.email);
     if (l) l.push(s);
     else perEmail.set(s.email, [s]);
@@ -342,4 +350,11 @@ export function isEnvelope(v: unknown): v is Envelope {
 export function envelopeSenzaDatiInChiaro(e: Envelope): boolean {
   const { enc: _enc, ...chiaro } = e;
   return !JSON.stringify(chiaro).includes("@");
+}
+
+/** Toglie dallo storico i soggiorni il cui indirizzo non supera le regole di esclusione attuali. Gli ID restano intatti. */
+export function senzaEsclusi(archivio: Archivio): { archivio: Archivio; tolti: number } {
+  const soggiorni = archivio.soggiorni.filter((s) => emailEsclusa(s.email) === null);
+  const tolti = archivio.soggiorni.length - soggiorni.length;
+  return tolti === 0 ? { archivio, tolti } : { archivio: { ...archivio, soggiorni }, tolti };
 }

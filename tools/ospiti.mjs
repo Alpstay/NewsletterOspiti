@@ -96,10 +96,12 @@ var INTERNI = [/(^|\.)alpstay\.(eu|ai|it|com)$/, /(^|\.)saslong\.ai$/];
 var SEGNAPOSTO = /^(no-?e?-?mail|nomail|none|test|keine|nessuna|na|n\.a\.|x+|0+|-+)$/;
 var EMAIL = /^[^\s@<>()[\],;:"]+@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*\.[a-z]{2,}$/;
 var normalizzaEmail = (raw) => raw.trim().replace(/^mailto:/i, "").toLowerCase();
+var PAROLE_PORTALE = ["booking", "expedia"];
 function emailEsclusa(email) {
   if (!EMAIL.test(email)) return "nonValida";
   const [local, domain] = email.split("@");
   if (SEGNAPOSTO.test(local)) return "nonValida";
+  if (PAROLE_PORTALE.some((p) => email.includes(p))) return "portale";
   if (PORTALI.some((r) => r.test(domain))) return "portale";
   if (INTERNI.some((r) => r.test(domain))) return "interna";
   return null;
@@ -222,6 +224,7 @@ function unisci(prev, oggiLetti, copre, oggi, mesi = CONSERVAZIONE_MESI) {
     else nuovi++;
     out2.set(s.gsid, s);
   }
+  for (const [k, s] of out2) if (emailEsclusa(s.email)) out2.delete(k);
   const limite = addMonths(oggi, -mesi);
   let scaduti = 0;
   for (const [k, s] of out2) {
@@ -250,6 +253,7 @@ function ospitiDa(soggiorni, oggi) {
   const perEmail = /* @__PURE__ */ new Map();
   for (const s of soggiorni) {
     if (s.maggiorenneDal && s.maggiorenneDal > oggi) continue;
+    if (emailEsclusa(s.email)) continue;
     const l = perEmail.get(s.email);
     if (l) l.push(s);
     else perEmail.set(s.email, [s]);
@@ -303,6 +307,11 @@ function isEnvelope(v) {
 function envelopeSenzaDatiInChiaro(e) {
   const { enc: _enc, ...chiaro } = e;
   return !JSON.stringify(chiaro).includes("@");
+}
+function senzaEsclusi(archivio) {
+  const soggiorni = archivio.soggiorni.filter((s) => emailEsclusa(s.email) === null);
+  const tolti = archivio.soggiorni.length - soggiorni.length;
+  return tolti === 0 ? { archivio, tolti } : { archivio: { ...archivio, soggiorni }, tolti };
 }
 
 // src/shared/importa.ts
@@ -839,7 +848,9 @@ function freschezza(list) {
   }
   return { status, updatedAt };
 }
-async function scrivi(archivio, sgr, fresh) {
+async function scrivi(grezzo, sgr, fresh) {
+  const { archivio, tolti } = senzaEsclusi(grezzo);
+  if (tolti > 0) console.log(`RIEPILOGO esclusi dallo storico per le regole attuali (booking/expedia, portali, non validi): ${tolti}`);
   const envelope = {
     format: 2,
     app: APP,
