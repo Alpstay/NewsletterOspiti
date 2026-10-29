@@ -1,0 +1,147 @@
+<title>Ospiti newsletter · AlpStay</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Belleza&family=Lato:wght@400;700&display=swap">
+<style>
+  :root {
+    --oro: #a8864c;
+    --oro-scuro: #7d6233;
+    --oro-chiaro: #f3ebdd;
+    --nero: #1a1a1a;
+    --grigio: #6b6b6b;
+    --linea: #e6e1d8;
+    --fondo: #ffffff;
+    --fondo-2: #faf8f4;
+    --rosso: #a23b2a;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--nero); font: 15px/1.45 Lato, system-ui, sans-serif; }
+  h1, .logo, legend, summary { font-family: Belleza, Lato, sans-serif; font-weight: 400; }
+  button, input, select { font: inherit; color: inherit; }
+  [hidden] { display: none !important; }
+
+  .top { padding: 20px 16px 12px; border-bottom: 1px solid var(--linea); max-width: 1400px; margin: 0 auto; }
+  .brand { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .logo { font-size: 22px; letter-spacing: .28em; color: var(--nero); }
+  .payoff { font-size: 10px; letter-spacing: .24em; color: var(--oro); }
+  h1 { margin: 6px 0 2px; font-size: 28px; color: var(--oro-scuro); }
+  .stato { margin: 0; color: var(--grigio); font-size: 13px; }
+  .stato.avviso { color: var(--rosso); font-weight: 700; }
+
+  .lock { display: grid; place-items: center; padding: 48px 16px; }
+  .lock form { width: min(360px, 100%); display: grid; gap: 10px; }
+  .lock label { font-weight: 700; }
+  .lock input { padding: 12px; border: 1px solid var(--linea); border-radius: 8px; font-size: 16px; }
+  .msg { min-height: 1.4em; margin: 0; color: var(--rosso); }
+
+  .btn, .lock button { background: var(--nero); color: #fff; border: 0; border-radius: 8px; padding: 11px 16px; font-weight: 700; cursor: pointer; }
+  .btn.oro { background: var(--oro); }
+  .btn:disabled, .lock button:disabled { opacity: .45; cursor: default; }
+  .btn.ghost { background: transparent; color: var(--nero); border: 1px solid var(--linea); font-weight: 400; }
+  .link { background: none; border: 0; color: var(--oro-scuro); text-decoration: underline; cursor: pointer; padding: 6px 0; }
+
+  main { display: grid; grid-template-columns: 1fr; gap: 16px; padding: 16px; max-width: 1400px; margin: 0 auto; }
+  @media (min-width: 900px) { main { grid-template-columns: 290px minmax(0, 1fr); align-items: start; } .filtri { position: sticky; top: 12px; } }
+
+  .filtri-box { border: 1px solid var(--linea); border-radius: 12px; background: var(--fondo-2); padding: 4px 14px 14px; }
+  .filtri-box summary { cursor: pointer; font-size: 20px; padding: 8px 0; color: var(--oro-scuro); }
+  fieldset { border: 0; border-top: 1px solid var(--linea); margin: 0; padding: 10px 0 8px; }
+  legend { font-size: 15px; padding: 0 0 4px; color: var(--nero); }
+  input[type=search], input[type=date], select { width: 100%; padding: 9px 10px; border: 1px solid var(--linea); border-radius: 8px; background: #fff; }
+  input.mini { padding: 6px 8px; margin-bottom: 6px; font-size: 14px; }
+  .date { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--grigio); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip, .seg button { border: 1px solid var(--linea); background: #fff; border-radius: 999px; padding: 7px 12px; cursor: pointer; min-height: 38px; }
+  .chip small { color: var(--grigio); }
+  .chip[aria-pressed=true], .seg button[aria-pressed=true] { background: var(--nero); color: #fff; border-color: var(--nero); }
+  .chip[aria-pressed=true] small { color: #ddd; }
+  .seg { display: flex; gap: 6px; }
+  .seg button { flex: 1; }
+  .checklist { max-height: 200px; overflow: auto; display: grid; gap: 2px; padding-right: 4px; }
+  .checklist label { display: flex; align-items: center; gap: 6px; padding: 4px 2px; cursor: pointer; border-radius: 6px; }
+  .checklist label:hover { background: var(--oro-chiaro); }
+  .checklist em { color: var(--grigio); font-style: normal; font-size: 12px; }
+  .checklist small { margin-left: auto; color: var(--grigio); font-size: 12px; }
+  input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--oro); }
+
+  .barra { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .barra .conta { font-family: Belleza, Lato, sans-serif; font-size: 22px; margin-right: auto; }
+  .barra label { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; }
+  .ordine { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 12px; font-size: 13px; }
+  .ordine .etichetta { color: var(--grigio); margin-right: 4px; }
+  .criterio { display: inline-flex; border: 1px solid var(--linea); border-radius: 999px; overflow: hidden; background: #fff; }
+  .criterio button { border: 0; background: none; padding: 6px 10px; cursor: pointer; }
+  .criterio .su { border-right: 1px solid var(--linea); color: var(--oro-scuro); font-weight: 700; }
+  .criterio .su:disabled { color: #ccc; cursor: default; }
+  .criterio .verso:hover { background: var(--oro-chiaro); }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--grigio); font-weight: 700; padding: 8px; border-bottom: 2px solid var(--oro); }
+  td { padding: 9px 8px; border-bottom: 1px solid var(--linea); vertical-align: top; }
+  td small { display: block; color: var(--grigio); font-size: 12px; }
+  tr.sel td { background: var(--oro-chiaro); }
+  td.ospite strong { display: block; }
+  .email { color: var(--grigio); font-size: 13px; word-break: break-all; }
+  .badge { display: inline-block; background: var(--oro); color: #fff; border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 700; }
+  .muted { color: var(--grigio); font-size: 13px; }
+  td.vuoto { text-align: center; color: var(--grigio); padding: 32px; }
+  .pager { display: flex; gap: 12px; align-items: center; justify-content: center; padding: 14px 0; }
+  .pager button { border: 1px solid var(--linea); background: #fff; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+  .pager button:disabled { opacity: .4; cursor: default; }
+  .note { color: var(--grigio); font-size: 12px; border-top: 1px solid var(--linea); padding-top: 10px; }
+
+  /* Smartphone: ogni ospite diventa una scheda */
+  @media (max-width: 720px) {
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { position: relative; border: 1px solid var(--linea); border-radius: 10px; margin-bottom: 10px; padding: 8px 10px 8px 44px; }
+    td { border: 0; padding: 3px 0; }
+    td.cb { position: absolute; left: 12px; top: 12px; width: auto; }
+    td[data-l]:not(.ospite)::before { content: attr(data-l) ": "; color: var(--grigio); font-size: 12px; }
+    td small { display: inline; margin-left: 6px; }
+    .barra .conta { width: 100%; }
+  }
+</style>
+<div id="app">
+  <header class="top">
+    <div class="brand"><span class="logo">ALPSTAY</span><span class="payoff">BE FREE. STAY TRUE</span></div>
+    <h1>Ospiti per la newsletter</h1>
+    <p class="stato" id="stato">Caricamento…</p>
+  </header>
+
+  <section class="lock" id="lock">
+    <form id="lockForm" autocomplete="off">
+      <label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <button type="submit">Apri l'elenco</button>
+      <p class="msg" id="lockMsg" role="alert"></p>
+    </form>
+  </section>
+
+  <main id="main" hidden>
+    <aside class="filtri" id="filtri"></aside>
+    <section>
+      <div class="barra">
+        <span class="conta" id="conta"></span>
+        <button type="button" class="btn ghost" id="selTutti">Seleziona tutti</button>
+        <button type="button" class="btn ghost" id="selNessuno">Svuota selezione</button>
+        <label><input type="checkbox" id="perLingua"> un foglio per lingua</label>
+        <button type="button" class="btn oro" id="excel">Scarica Excel</button>
+      </div>
+      <div class="ordine" id="ordine"></div>
+      <table>
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="selPagina" aria-label="Seleziona la pagina"></th>
+            <th>Ospite</th><th>Lingua</th><th>Nazione</th><th>Case</th><th>Soggiorno</th><th>Abituale</th>
+          </tr>
+        </thead>
+        <tbody id="righe"></tbody>
+      </table>
+      <div class="pager" id="pager"></div>
+      <p class="note" id="note"></p>
+    </section>
+  </main>
+</div>
+<script>/*APP_SCRIPT*/</script>
