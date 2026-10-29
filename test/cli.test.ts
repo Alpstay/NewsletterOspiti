@@ -97,7 +97,7 @@ ok(run("verify", "password-sbagliata").includes("ERRORE"), "verify con la passwo
 
 // ── Giorno 2: La Scatola ha «dimenticato» settembre ──
 ok(run("start", "password-sbagliata-123").includes("la password non apre"), "con password sbagliata non parte (lo storico non si perde)");
-out = run("start", PW);
+out = run("start", PW, "--completo");
 const token2 = /SEGNO (\S+)/.exec(out)?.[1];
 appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash1", content: `${out} ${token2}` }] } }) + "\n");
 const h1 = chiama(run("next"));
@@ -110,5 +110,46 @@ ok(out.includes("PRONTO"), `il secondo aggiornamento finisce\n${out}`);
 ok(out.includes("ospiti unici: 2, abituali 1"), `ospite1 torna a febbraio: abituale grazie allo storico\n${out}`);
 ok(/storico: 3 soggiorni/.test(out), "settembre resta nello storico anche se La Scatola non lo ha più");
 ok(run("verify", PW).includes("2 ospiti unici, 1 abituali"), "verify del secondo giorno");
+
+// ── Giorno 3: aggiornamento incrementale (solo l'ultima settimana e il futuro) ──
+out = run("start", PW);
+ok(out.includes("INCREMENTALE") || out.includes("COMPLETO (tutta"), "start annuncia il tipo di aggiornamento");
+const incrementale = out.includes("INCREMENTALE");
+appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash2", content: out }] } }) + "\n");
+const i1 = chiama(run("next"));
+if (incrementale) eq((i1.filters as { field: string }[]).map((f) => f.field), ["primary_email", "stay_end"], "incrementale: filtro sulla fine del soggiorno");
+registra(i1, pagina([ospite(4, { reservation_id: "aaaaaaaa-0000-4000-8000-000000000099", stay_start: "2026-12-27", stay_end: "2027-01-02" }), ospite(6, { primary_email: "ospite1@esempio.test", stay_start: "2027-02-01", stay_end: "2027-02-05" })], null, 2));
+const ir = chiama(run("next"));
+registra(ir, pagina([prenotazione(6)], null, 1));
+out = run("next");
+ok(out.includes("PRONTO") && /storico: 3 soggiorni/.test(out), `incrementale: storico intatto\n${out}`);
+
+// ── Importazione da un'esportazione di Slope (CSV inventato) ──
+const csv = join(root, "export.csv");
+writeFileSync(
+  csv,
+  [
+    "Cognome;Nome;E-mail;Lingua;Nazionalità;Arrivo;Partenza;Struttura",
+    "Rossi;Anna;anna.rossi@esempio.test;Italiano;Italia;12/02/2026;16/02/2026;Smart Hotel Saslong",
+    "Rossi;Anna;anna.rossi@esempio.test;Italiano;Italia;03/08/2026;06/08/2026;Hotel Acadia",
+    "Quattro;Ospite;ospite4@esempio.test;Deutsch;Germany;20/03/2026;22/03/2026;Chalet Hartmann",
+    "Portale;Tizio;abc.1@guest.booking.com;en;GB;01/03/2026;03/03/2026;Saslong",
+    "Futuro;Caio;caio@esempio.test;en;GB;30/12/2026;02/01/2027;Saslong",
+    "Senza;Casa;sc@esempio.test;en;GB;01/03/2026;03/03/2026;Altrove",
+  ].join("\n"),
+);
+out = run("importa", csv, PW);
+ok(out.includes("PRONTO"), `importazione riuscita\n${out}`);
+ok(out.includes("righe importate: 3") && out.includes("1 email dei portali") && out.includes("1 senza data o casa leggibile") && out.includes("1 già coperte da La Scatola"), `conteggi dell'importazione\n${out}`);
+ok(out.includes("ospiti unici: 3, abituali 3"), `anna (2 viaggi), ospite1 e ospite4 (storico importato) abituali\n${out}`);
+ok(run("importa", csv, PW).includes("righe importate: 3") && run("verify", PW).includes("(3 importati)"), "reimportare lo stesso file non crea doppioni");
+ok(!readFileSync(join(repo, "ospiti.json"), "utf8").includes("esempio.test"), "anche dopo l'importazione nessun dato in chiaro");
+out = run("start", PW);
+appendFileSync(transcript, JSON.stringify({ timestamp: new Date().toISOString(), message: { role: "user", content: [{ type: "tool_result", tool_use_id: "bash3", content: out }] } }) + "\n");
+const j1 = chiama(run("next"));
+registra(j1, pagina([ospite(4, { reservation_id: "aaaaaaaa-0000-4000-8000-000000000099", stay_start: "2026-12-27", stay_end: "2027-01-02" }), ospite(6, { primary_email: "ospite1@esempio.test", stay_start: "2027-02-01", stay_end: "2027-02-05" })], null, 2));
+registra(chiama(run("next")), pagina([prenotazione(6)], null, 1));
+out = run("next");
+ok(out.includes("PRONTO") && out.includes("3 importati in tutto"), `i soggiorni importati restano dopo l'aggiornamento notturno\n${out}`);
 
 fine("programma dell'attività pianificata");

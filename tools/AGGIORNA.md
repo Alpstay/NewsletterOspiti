@@ -40,15 +40,38 @@ storico andrebbe perso, e il programma si ferma.
      chiamata (dopo 3 errori si ferma).
    - `PRONTO`: `ospiti.json` è scritto e verificato. Vai al passo 3.
    - `ERRORE`: fermati, non pubblicare, riporta il messaggio.
-   Di solito servono circa 40 chiamate: ~16 pagine di soggiorni con email (`curated_guest_stays`) e
-   ~26 pagine di prenotazioni (`curated_reservations`, senza dati personali: stato, canale, data di
-   prenotazione). Il server restituisce al massimo ~65 KB per pagina: è normale.
+   `start` dice quale aggiornamento fa:
+   - **INCREMENTALE** (di norma): solo i soggiorni che finiscono dagli ultimi 7 giorni in poi e le loro
+     prenotazioni. Servono poche chiamate (circa 4). I soggiorni più vecchi sono già nello storico.
+   - **COMPLETO** (il 1° di ogni mese, con `--completo` o senza storico): tutta la finestra di La Scatola,
+     circa 40 chiamate (~16 pagine di `curated_guest_stays`, ~26 di `curated_reservations`). È la rete di
+     sicurezza per le correzioni tardive fatte in Slope.
+   Il server restituisce al massimo ~65 KB per pagina: è normale.
 3. Controllo: `node tools/ospiti.mjs verify "<PASSWORD>"` deve rispondere `verifica OK`.
 4. Pubblica: `git add ospiti.json`, commit `Ospiti newsletter <AAAA-MM-GG>`, `git push origin HEAD:main`.
    Se il push è rifiutato perché il repository è cambiato: copia `ospiti.json` fuori dal repository,
    `git fetch origin main`, `git reset --hard origin/main`, rimetti il file, di nuovo add, commit e push.
    Una volta sola. Con errore 403 non insistere: scrivilo nel riepilogo.
 5. Riepilogo breve in italiano con le righe `RIEPILOGO` (solo conteggi, nessun dato personale).
+
+## Importare lo storico da un'esportazione di Slope
+
+La Scatola non ha gli ospiti degli anni passati. Per far riconoscere subito gli abituali si può aggiungere
+allo storico un'esportazione di Slope (Excel .xlsx o CSV) con almeno le colonne email e data di arrivo:
+
+```
+node tools/ospiti.mjs importa esportazione.xlsx "<PASSWORD>"            # con una colonna Struttura/Hotel
+node tools/ospiti.mjs importa esportazione.xlsx "<PASSWORD>" --casa saslong   # esportazione di una sola casa
+```
+
+- Le colonne si riconoscono dal nome (Nome, Cognome, Email, Lingua, Cittadinanza/Nazionalità, Arrivo,
+  Partenza, Struttura, Data di nascita; anche in inglese o tedesco), in qualunque ordine.
+- Si importano solo i soggiorni **prima** della finestra di La Scatola (da lì in poi valgono i dati
+  aggiornati ogni notte) e non più vecchi di 24 mesi; stesse esclusioni (portali, minori, …).
+- I soggiorni importati hanno un identificativo generato `imp-…` (non è un ID di Slope) e non vengono
+  mai tolti dall'aggiornamento notturno. Reimportare lo stesso file non crea doppioni.
+- Il file esportato contiene dati personali: si usa nella sessione e **non si aggiunge al repository**.
+  Si pubblica solo `ospiti.json` (commit `Importazione storico <AAAA-MM-GG>`).
 
 ## Modifiche al codice
 

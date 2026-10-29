@@ -1,7 +1,7 @@
 // Generato da src/cli/ospiti-cli.ts con build.mjs: non modificare a mano.
 
 // src/cli/ospiti-cli.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2, writeFileSync } from "node:fs";
+import { existsSync as existsSync2, readFileSync as readFileSync3, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as join2 } from "node:path";
 
@@ -187,13 +187,14 @@ function soggiornoDa(r, pren, oggi) {
   };
 }
 var nessunEscluso = () => ({ portale: 0, nonValida: 0, interna: 0, minori: 0, cancellati: 0 });
-function unisci(prev, oggiLetti, finestraDal, oggi, mesi = CONSERVAZIONE_MESI) {
+var IMPORT_ID = /^imp-[0-9a-f]{16}$/;
+function unisci(prev, oggiLetti, copre, oggi, mesi = CONSERVAZIONE_MESI) {
   const fresh = new Map(oggiLetti.map((s) => [s.gsid, s]));
   const out2 = /* @__PURE__ */ new Map();
   let spariti = 0;
   let precedentiInFinestra = 0;
   for (const s of prev) {
-    if (s.dal >= finestraDal) {
+    if (s.origine !== "import" && copre(s)) {
       precedentiInFinestra++;
       if (!fresh.has(s.gsid)) {
         spariti++;
@@ -292,8 +293,273 @@ function envelopeSenzaDatiInChiaro(e) {
   return !JSON.stringify(chiaro).includes("@");
 }
 
+// src/shared/importa.ts
+var SINONIMI = {
+  email: ["email", "e-mail", "e mail", "mail", "indirizzo email", "email principale", "primary email", "e-mail-adresse"],
+  nome: ["nome", "first name", "firstname", "vorname", "nome ospite"],
+  cognome: ["cognome", "last name", "lastname", "surname", "nachname", "cognome ospite"],
+  nominativo: ["nominativo", "cliente", "ospite", "intestatario", "nome completo", "full name", "guest", "name"],
+  lingua: ["lingua", "language", "sprache", "lingua ospite"],
+  nazione: ["cittadinanza", "nazionalita", "nazionalit\xE0", "nazione", "paese", "country", "citizenship", "nationality", "staatsangehorigkeit", "land"],
+  arrivo: ["arrivo", "data arrivo", "check-in", "check in", "checkin", "dal", "arrival", "anreise", "inizio soggiorno"],
+  partenza: ["partenza", "data partenza", "check-out", "check out", "checkout", "al", "departure", "abreise", "fine soggiorno"],
+  casa: ["struttura", "hotel", "casa", "property", "proprieta", "propriet\xE0", "esercizio"],
+  nascita: ["data di nascita", "nascita", "birth date", "birthdate", "data nascita", "geburtsdatum"]
+};
+var norm = (s) => s.normalize("NFD").replace(new RegExp("\\p{M}", "gu"), "").toLowerCase().replace(/[_.:]+/g, " ").replace(/\s+/g, " ").trim();
+function mappaColonne(righe) {
+  for (let r = 0; r < Math.min(10, righe.length); r++) {
+    const intest = righe[r].map(norm);
+    const colonne = {};
+    for (const campo of Object.keys(SINONIMI)) {
+      const i = intest.findIndex((h) => SINONIMI[campo].some((s) => h === norm(s)));
+      if (i >= 0) colonne[campo] = i;
+    }
+    if (colonne.email !== void 0 && colonne.arrivo !== void 0) return { riga: r, colonne };
+  }
+  return null;
+}
+function dataDa(v) {
+  const s = v.trim();
+  if (!s) return null;
+  if (/^\d{4,5}(\.\d+)?$/.test(s)) {
+    const n = Math.floor(Number(s));
+    if (n > 2e4 && n < 8e4) return new Date(Date.UTC(1899, 11, 30) + n * 864e5).toISOString().slice(0, 10);
+  }
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
+  if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  m = /^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})/.exec(s);
+  if (m) {
+    const y = m[3].length === 2 ? `20${m[3]}` : m[3];
+    return `${y}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+  }
+  return null;
+}
+function dizionario(type, codici) {
+  const m = /* @__PURE__ */ new Map();
+  for (const loc of ["it", "en", "de"]) {
+    let dn = null;
+    try {
+      dn = new Intl.DisplayNames([loc], { type });
+    } catch {
+      continue;
+    }
+    for (const c of codici) {
+      try {
+        const n = dn.of(c);
+        if (n && n !== c && !m.has(norm(n))) m.set(norm(n), c);
+      } catch {
+      }
+    }
+  }
+  return m;
+}
+var REGIONI = (() => {
+  const out2 = [];
+  for (let a = 65; a <= 90; a++) for (let b = 65; b <= 90; b++) out2.push(String.fromCharCode(a, b));
+  return out2;
+})();
+var paesi = null;
+var lingue = null;
+function nazioneDa(v) {
+  const s = v.trim();
+  if (!s) return null;
+  if (/^[A-Za-z]{2}$/.test(s)) return s.toUpperCase();
+  paesi ??= dizionario("region", REGIONI);
+  return paesi.get(norm(s)) ?? null;
+}
+function linguaDa(v) {
+  const s = v.trim();
+  if (!s) return null;
+  if (/^[A-Za-z]{2}([-_][A-Za-z]{2})?$/.test(s)) return s.slice(0, 2).toLowerCase();
+  lingue ??= dizionario("language", ["it", "de", "en", "fr", "es", "nl", "pt", "pl", "cs", "ru", "zh", "ko", "ar", "he", "ja", "hu", "sv", "da", "no", "fi", "ro", "sk", "sl", "hr", "el", "tr", "uk"]);
+  return lingue.get(norm(s)) ?? null;
+}
+function casaIdDa(v) {
+  const s = norm(v);
+  return CASE.find((c) => s.includes(c.key))?.id ?? null;
+}
+async function sha16(testo) {
+  const h = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(testo));
+  return [...new Uint8Array(h)].slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+async function importaRighe(righe, oggi, finoAl, casaPredefinita) {
+  const mappa = mappaColonne(righe);
+  if (!mappa) throw new Error("intestazione non riconosciuta: servono almeno una colonna email e una colonna arrivo (es. \xABEmail\xBB, \xABArrivo\xBB)");
+  const c = mappa.colonne;
+  const cella = (r, k) => c[k] !== void 0 ? r[c[k]] ?? "" : "";
+  const esclusi = { portale: 0, nonValida: 0, interna: 0, minori: 0, cancellati: 0 };
+  let illeggibili = 0;
+  let giaInScatola = 0;
+  const out2 = /* @__PURE__ */ new Map();
+  const limite = addMonths(oggi, -24);
+  for (const r of righe.slice(mappa.riga + 1)) {
+    const grezza = cella(r, "email");
+    if (!grezza) {
+      esclusi.nonValida++;
+      continue;
+    }
+    const email = normalizzaEmail(grezza);
+    const motivo = emailEsclusa(email);
+    if (motivo) {
+      esclusi[motivo]++;
+      continue;
+    }
+    const dal = dataDa(cella(r, "arrivo"));
+    const pid = (c.casa !== void 0 ? casaIdDa(cella(r, "casa")) : null) ?? casaPredefinita;
+    if (!dal || !pid) {
+      illeggibili++;
+      continue;
+    }
+    const al = dataDa(cella(r, "partenza")) ?? dal;
+    if (al < limite) continue;
+    if (finoAl && dal >= finoAl) {
+      giaInScatola++;
+      continue;
+    }
+    const nascita = dataDa(cella(r, "nascita"));
+    const maggiorenneDal = nascita ? addMonths(nascita, 18 * 12) : null;
+    if (maggiorenneDal && maggiorenneDal > oggi) {
+      esclusi.minori++;
+      continue;
+    }
+    let nome = capitalizza(cella(r, "nome"));
+    const cognome = capitalizza(cella(r, "cognome"));
+    if (!nome && !cognome) nome = capitalizza(cella(r, "nominativo"));
+    const gsid = `imp-${await sha16(`${email}|${pid}|${dal}`)}`;
+    out2.set(gsid, {
+      gsid,
+      rid: null,
+      pid,
+      nome,
+      cognome,
+      email,
+      linguaSlope: linguaDa(cella(r, "lingua")),
+      nazione: nazioneDa(cella(r, "nazione")),
+      dal,
+      al: al >= dal ? al : dal,
+      privacyDal: null,
+      prenotataIl: null,
+      canale: null,
+      maggiorenneDal,
+      vistoIl: oggi,
+      origine: "import"
+    });
+  }
+  return { soggiorni: [...out2.values()], esclusi, illeggibili, giaInScatola, colonne: c };
+}
+
+// src/cli/tabella.ts
+import { readFileSync } from "node:fs";
+import { inflateRawSync } from "node:zlib";
+function voci(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--)
+    if (buf.readUInt32LE(i) === 101010256) {
+      eocd = i;
+      break;
+    }
+  if (eocd < 0) throw new Error("il file non \xE8 un .xlsx valido (archivio ZIP non riconosciuto)");
+  const n = buf.readUInt16LE(eocd + 10);
+  let p = buf.readUInt32LE(eocd + 16);
+  const out2 = /* @__PURE__ */ new Map();
+  for (let i = 0; i < n; i++) {
+    if (buf.readUInt32LE(p) !== 33639248) throw new Error("indice ZIP danneggiato");
+    const metodo = buf.readUInt16LE(p + 10);
+    const compresso = buf.readUInt32LE(p + 20);
+    const lNome = buf.readUInt16LE(p + 28);
+    const lExtra = buf.readUInt16LE(p + 30);
+    const lComm = buf.readUInt16LE(p + 32);
+    const locale = buf.readUInt32LE(p + 42);
+    const nome = buf.toString("utf8", p + 46, p + 46 + lNome);
+    const inizio = locale + 30 + buf.readUInt16LE(locale + 26) + buf.readUInt16LE(locale + 28);
+    const dati = buf.subarray(inizio, inizio + compresso);
+    out2.set(nome, metodo === 0 ? dati : metodo === 8 ? inflateRawSync(dati) : Buffer.alloc(0));
+    p += 46 + lNome + lExtra + lComm;
+  }
+  return out2;
+}
+var unescape = (s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&#x([0-9a-f]+);/gi, (_m, h) => String.fromCodePoint(parseInt(h, 16))).replace(/&#(\d+);/g, (_m, d) => String.fromCodePoint(Number(d))).replace(/&amp;/g, "&");
+var testi = (xml) => [...xml.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map((m) => unescape(m[1])).join("");
+function colonna(ref) {
+  const lettere = /^[A-Z]+/.exec(ref)?.[0] ?? "A";
+  let n = 0;
+  for (const c of lettere) n = n * 26 + (c.charCodeAt(0) - 64);
+  return n - 1;
+}
+function leggiXlsx(buf) {
+  const z = voci(buf);
+  const shared = z.get("xl/sharedStrings.xml")?.toString("utf8") ?? "";
+  const stringhe = [...shared.matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => testi(m[1]));
+  const wb = z.get("xl/workbook.xml")?.toString("utf8") ?? "";
+  const rels = z.get("xl/_rels/workbook.xml.rels")?.toString("utf8") ?? "";
+  const rid = /<sheet\b[^>]*\br:id="([^"]+)"/.exec(wb)?.[1];
+  const target = rid ? new RegExp(`<Relationship\\b[^>]*Id="${rid}"[^>]*Target="([^"]+)"`).exec(rels)?.[1] ?? new RegExp(`Target="([^"]+)"[^>]*Id="${rid}"`).exec(rels)?.[1] : void 0;
+  const percorso = target ? target.startsWith("/") ? target.slice(1) : `xl/${target.replace(/^\.\//, "")}` : "xl/worksheets/sheet1.xml";
+  const foglio = (z.get(percorso) ?? z.get("xl/worksheets/sheet1.xml"))?.toString("utf8");
+  if (!foglio) throw new Error("primo foglio non trovato nel file .xlsx");
+  const righe = [];
+  for (const r of foglio.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+    const riga = [];
+    for (const c of r[1].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+      const attr = c[1];
+      const corpo = c[2] ?? "";
+      const ref = /\br="([A-Z]+\d+)"/.exec(attr)?.[1];
+      const tipo = /\bt="([^"]+)"/.exec(attr)?.[1];
+      const v = /<v>([\s\S]*?)<\/v>/.exec(corpo)?.[1];
+      let val = "";
+      if (tipo === "s" && v !== void 0) val = stringhe[Number(v)] ?? "";
+      else if (tipo === "inlineStr") val = testi(corpo);
+      else if (v !== void 0) val = unescape(v);
+      riga[ref ? colonna(ref) : riga.length] = val.trim();
+    }
+    righe.push(Array.from(riga, (x) => x ?? ""));
+  }
+  return righe;
+}
+function leggiCsv(testo) {
+  const t = testo.replace(/^﻿/, "");
+  const primaRiga = t.split(/\r?\n/, 1)[0] ?? "";
+  const sep = [";", ",", "	"].sort((a, b) => primaRiga.split(b).length - primaRiga.split(a).length)[0];
+  const righe = [];
+  let riga = [];
+  let campo = "";
+  let virgolette = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (virgolette) {
+      if (ch === '"' && t[i + 1] === '"') {
+        campo += '"';
+        i++;
+      } else if (ch === '"') virgolette = false;
+      else campo += ch;
+    } else if (ch === '"') virgolette = true;
+    else if (ch === sep) {
+      riga.push(campo.trim());
+      campo = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && t[i + 1] === "\n") i++;
+      riga.push(campo.trim());
+      righe.push(riga);
+      riga = [];
+      campo = "";
+    } else campo += ch;
+  }
+  if (campo || riga.length) {
+    riga.push(campo.trim());
+    righe.push(riga);
+  }
+  return righe.filter((r) => r.some((c) => c !== ""));
+}
+function leggiTabella(percorso) {
+  const buf = readFileSync(percorso);
+  if (/\.xlsx$/i.test(percorso) || buf[0] === 80 && buf[1] === 75) return leggiXlsx(buf);
+  if (/\.xls$/i.test(percorso)) throw new Error("il vecchio formato .xls non \xE8 supportato: salva il file come .xlsx o .csv");
+  return leggiCsv(buf.toString("utf8"));
+}
+
 // src/cli/transcript.ts
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync as readFileSync2, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 var isRec = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -337,7 +603,7 @@ function transcripts() {
 function findTranscript(token) {
   for (const t of transcripts()) {
     try {
-      if (readFileSync(t.path, "utf8").includes(token)) return t.path;
+      if (readFileSync2(t.path, "utf8").includes(token)) return t.path;
     } catch {
     }
   }
@@ -375,7 +641,7 @@ function parseResult(body, isError) {
   const saved = SAVED_PATH.exec(raw);
   if (saved) {
     if (!existsSync(saved[1])) return { page: null, error: `file della risposta non trovato (${basename(saved[1])})` };
-    const page2 = asPage(readFileSync(saved[1], "utf8"));
+    const page2 = asPage(readFileSync2(saved[1], "utf8"));
     return page2 ? { page: page2, error: null } : { page: null, error: `file della risposta illeggibile (${basename(saved[1])})` };
   }
   if (isError) return { page: null, error: raw.replace(/\s+/g, " ").slice(0, 160) || "errore dello strumento" };
@@ -385,7 +651,7 @@ function parseResult(body, isError) {
 }
 function readCalls(transcript, since) {
   const byId = /* @__PURE__ */ new Map();
-  for (const line of readFileSync(transcript, "utf8").split("\n")) {
+  for (const line of readFileSync2(transcript, "utf8").split("\n")) {
     if (!line || !line.includes("Scatola") && !line.includes("tool_result")) continue;
     let o;
     try {
@@ -436,6 +702,7 @@ var RUN_FILE = join2(tmpdir(), "newsletter-ospiti-run.json");
 var CMD = "node tools/ospiti.mjs";
 var MAX_TRIES = 3;
 var MAX_SPARITI = 0.3;
+var GIORNI_INCREMENTALE = 7;
 function out(line) {
   process.stdout.write(`${line}
 `);
@@ -444,24 +711,27 @@ function fail(message) {
   out(`ERRORE ${message}`);
   process.exit(2);
 }
-var GUEST_ARGS = {
-  view: "curated_guest_stays",
-  filters: [{ field: "primary_email", op: "neq", value: null }],
-  order_by: [{ field: "stay_start", direction: "asc" }],
-  limit: 500
-};
-var reservationArgs = (finestraDal) => ({
+var GUEST_FILTER = { field: "primary_email", op: "neq", value: null };
+function guestArgs(run) {
+  return {
+    view: "curated_guest_stays",
+    filters: run.completo ? [GUEST_FILTER] : [GUEST_FILTER, { field: "stay_end", op: "gte", value: addDays(run.day, -GIORNI_INCREMENTALE) }],
+    order_by: [{ field: "stay_start", direction: "asc" }],
+    limit: 500
+  };
+}
+var reservationArgs = (dal) => ({
   view: "curated_reservations",
   filters: [
     { field: "registered_guests", op: "gt", value: 0 },
-    { field: "departure", op: "gte", value: finestraDal }
+    { field: "departure", op: "gte", value: dal }
   ],
   order_by: [{ field: "arrival", direction: "asc" }],
   limit: 500
 });
 async function leggiStorico(password) {
   if (!existsSync2(FILE)) return null;
-  const env = JSON.parse(readFileSync2(FILE, "utf8"));
+  const env = JSON.parse(readFileSync3(FILE, "utf8"));
   if (!isEnvelope(env)) fail(`${FILE} non \xE8 un file della piattaforma newsletter: non procedere.`);
   const archivio = await decryptJson(env.enc, password, aadFor(env.day)).catch(
     () => fail(`la password non apre ${FILE}: \xE8 sbagliata o il file \xE8 alterato. Non procedere, lo storico andrebbe perso.`)
@@ -481,29 +751,61 @@ function freschezza(list) {
   }
   return { status, updatedAt };
 }
+async function scrivi(archivio, password, fresh) {
+  const envelope = {
+    format: 1,
+    app: APP,
+    generated_at: (/* @__PURE__ */ new Date()).toISOString(),
+    scatola_updated_at: fresh.updatedAt,
+    freshness: fresh.status,
+    day: archivio.day,
+    enc: await encryptJson(archivio, password, aadFor(archivio.day))
+  };
+  const back = await decryptJson(envelope.enc, password, aadFor(archivio.day));
+  if (JSON.stringify(back) !== JSON.stringify(archivio)) fail("la verifica della cifratura non torna. Non pubblicare.");
+  if (!envelopeSenzaDatiInChiaro(envelope)) fail("dati personali fuori dal blocco cifrato. Non pubblicare.");
+  writeFileSync(FILE, `${JSON.stringify(envelope)}
+`);
+  return envelope;
+}
+function riepilogoOspiti(soggiorni, day2) {
+  const ospiti = ospitiDa(soggiorni, day2);
+  const perCasa = CASE.map((c) => `${c.nome} ${ospiti.filter((o) => o.case.includes(c.key)).length}`).join(" \xB7 ");
+  const lingue2 = /* @__PURE__ */ new Map();
+  for (const o of ospiti) lingue2.set(o.lingua, (lingue2.get(o.lingua) ?? 0) + 1);
+  const topLingue = [...lingue2].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([l, n]) => `${l} ${n}`).join(" \xB7 ");
+  out(`RIEPILOGO ospiti unici: ${ospiti.length}, abituali ${ospiti.filter((o) => o.abituale).length} \xB7 ${perCasa}`);
+  out(`RIEPILOGO lingue: ${topLingue}`);
+}
+var riepilogoStorico = (u, importati = 0) => `RIEPILOGO storico: ${u.soggiorni.length} soggiorni (${u.nuovi} nuovi, ${u.aggiornati} aggiornati, ${u.spariti} tolti perch\xE9 spariti da Slope, ${u.scaduti} oltre ${CONSERVAZIONE_MESI} mesi${importati ? `, ${importati} importati in tutto` : ""})`;
 function loadRun() {
   if (!existsSync2(RUN_FILE)) fail(`nessuna esecuzione avviata: esegui prima ${CMD} start "<PASSWORD>".`);
-  return JSON.parse(readFileSync2(RUN_FILE, "utf8"));
+  return JSON.parse(readFileSync3(RUN_FILE, "utf8"));
 }
 async function start(args) {
-  const password = args.find((a) => !a.startsWith("--"));
+  const password = args.find((a) => !a.startsWith("--") && args[args.indexOf(a) - 1] !== "--transcript");
   if (!password || password.length < 12) fail(`serve la password: ${CMD} start "<PASSWORD>"`);
   if (!existsSync2("tools/ospiti.mjs")) fail("esegui il comando dalla cartella del repository NewsletterOspiti.");
   const primo = args.includes("--primo");
   const storico = await leggiStorico(password);
   if (!storico && !primo) fail(`${FILE} non c'\xE8: senza storico gli abituali si perdono. Se \xE8 davvero il primo aggiornamento usa --primo.`);
+  const day2 = romeDay();
+  const completo = args.includes("--completo") || !storico || day2.endsWith("-01");
   const ti = args.indexOf("--transcript");
   const run = {
     token: `NL-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`,
     startedAt: new Date(Date.now() - 1e3).toISOString(),
     password,
-    day: romeDay(),
+    day: day2,
     primo,
+    completo,
     transcript: ti >= 0 ? args[ti + 1] ?? null : null
   };
   writeFileSync(RUN_FILE, JSON.stringify(run), { mode: 384 });
   out(`SEGNO ${run.token}`);
-  out(`Giorno ${run.day} \xB7 storico: ${storico ? `${storico.archivio.soggiorni.length} soggiorni (aggiornato il ${storico.env.day})` : "nessuno, primo aggiornamento"}`);
+  out(
+    `Giorno ${day2} \xB7 aggiornamento ${completo ? "COMPLETO (tutta la finestra di La Scatola, ~40 chiamate)" : `INCREMENTALE (soggiorni che finiscono dal ${addDays(day2, -GIORNI_INCREMENTALE)} in poi, poche chiamate)`} \xB7 storico: ${storico ? `${storico.archivio.soggiorni.length} soggiorni (aggiornato il ${storico.env.day})` : "nessuno, primo aggiornamento"}`
+  );
   out(`Ora esegui: ${CMD} next`);
 }
 async function next() {
@@ -517,13 +819,15 @@ async function next() {
     out(`Copia gli argomenti identici, poi riesegui: ${CMD} next`);
     process.exit(0);
   };
-  const guests = follow(calls, GUEST_ARGS);
+  const guests = follow(calls, guestArgs(run));
   if (guests.next) ask(guests.next, guests, "soggiorni con email");
-  if (!guests.rows.length) fail("La Scatola non ha restituito nessun soggiorno con email. Non pubblicare.");
+  if (run.completo && !guests.rows.length) fail("La Scatola non ha restituito nessun soggiorno con email. Non pubblicare.");
   if (guests.total !== null && guests.rows.length < guests.total) fail(`lette ${guests.rows.length} righe su ${guests.total}. Non pubblicare.`);
-  const finestraDal = guests.rows.map((r) => typeof r.stay_start === "string" ? r.stay_start.slice(0, 10) : "").filter(Boolean).sort()[0];
-  if (!finestraDal) fail("nessuna data di inizio soggiorno nelle righe lette. Non pubblicare.");
-  const res = follow(calls, reservationArgs(finestraDal));
+  const primoInizio = guests.rows.map((r) => typeof r.stay_start === "string" ? r.stay_start.slice(0, 10) : "").filter(Boolean).sort()[0];
+  const daIncr = addDays(run.day, -GIORNI_INCREMENTALE);
+  if (run.completo && !primoInizio) fail("nessuna data di inizio soggiorno nelle righe lette. Non pubblicare.");
+  const resDal = run.completo ? primoInizio : primoInizio && primoInizio < daIncr ? primoInizio : daIncr;
+  const res = follow(calls, reservationArgs(resDal));
   if (res.next) ask(res.next, res, "prenotazioni");
   const pren = prenotazioniDa(res.rows);
   const esclusi = { ...nessunEscluso() };
@@ -538,65 +842,87 @@ async function next() {
     if (!pren.has(e.ok.rid)) senzaPrenotazione++;
     letti.set(e.ok.gsid, e.ok);
   }
-  if (!letti.size) fail("nessun soggiorno utilizzabile dopo le esclusioni. Non pubblicare.");
   const storico = run.primo ? null : await leggiStorico(run.password);
   if (!storico && !run.primo) fail(`${FILE} \xE8 sparito durante l'esecuzione. Non pubblicare.`);
   const prev = storico?.archivio.soggiorni ?? [];
-  const u = unisci(prev, [...letti.values()], finestraDal, run.day);
+  const copre = run.completo ? (s) => s.dal >= primoInizio : (s) => s.al >= daIncr;
+  const u = unisci(prev, [...letti.values()], copre, run.day);
   if (u.precedentiInFinestra >= 20 && u.spariti / u.precedentiInFinestra > MAX_SPARITI)
     fail(`spariti ${u.spariti} soggiorni su ${u.precedentiInFinestra} gi\xE0 nello storico per lo stesso periodo: troppi, probabilmente una lettura incompleta. Non pubblicare.`);
-  const archivio = { format: 1, day: run.day, finestraDal, conservazioneMesi: CONSERVAZIONE_MESI, soggiorni: u.soggiorni, esclusi };
-  const fresh = freschezza([...guests.freshness, ...res.freshness]);
-  const envelope = {
+  const archivio = {
     format: 1,
-    app: APP,
-    generated_at: (/* @__PURE__ */ new Date()).toISOString(),
-    scatola_updated_at: fresh.updatedAt,
-    freshness: fresh.status,
     day: run.day,
-    enc: await encryptJson(archivio, run.password, aadFor(run.day))
+    finestraDal: run.completo ? primoInizio : storico?.archivio.finestraDal ?? null,
+    conservazioneMesi: CONSERVAZIONE_MESI,
+    soggiorni: u.soggiorni,
+    esclusi: run.completo ? esclusi : storico?.archivio.esclusi ?? esclusi
   };
-  const back = await decryptJson(envelope.enc, run.password, aadFor(run.day));
-  if (JSON.stringify(back) !== JSON.stringify(archivio)) fail("la verifica della cifratura non torna. Non pubblicare.");
-  if (!envelopeSenzaDatiInChiaro(envelope)) fail("dati personali fuori dal blocco cifrato. Non pubblicare.");
-  writeFileSync(FILE, `${JSON.stringify(envelope)}
-`);
-  const ospiti = ospitiDa(u.soggiorni, run.day);
-  const perCasa = CASE.map((c) => `${c.nome} ${ospiti.filter((o) => o.case.includes(c.key)).length}`).join(" \xB7 ");
-  const lingue = /* @__PURE__ */ new Map();
-  for (const o of ospiti) lingue.set(o.lingua, (lingue.get(o.lingua) ?? 0) + 1);
-  const topLingue = [...lingue].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([l, n]) => `${l} ${n}`).join(" \xB7 ");
-  out(`RIEPILOGO La Scatola: ${guests.rows.length} soggiorni con email dal ${finestraDal}, ${res.rows.length} prenotazioni lette`);
+  const envelope = await scrivi(archivio, run.password, freschezza([...guests.freshness, ...res.freshness]));
+  out(`RIEPILOGO aggiornamento ${run.completo ? "completo" : "incrementale"}: ${guests.rows.length} soggiorni con email letti${run.completo ? ` dal ${primoInizio}` : ` (fine soggiorno dal ${daIncr})`}, ${res.rows.length} prenotazioni lette`);
   out(
     `RIEPILOGO scartati: ${esclusi.portale} email dei portali, ${esclusi.nonValida} non valide, ${esclusi.interna} interne, ${esclusi.minori} minori, ${esclusi.cancellati} prenotazioni cancellate o in opzione`
   );
   if (senzaPrenotazione) out(`RIEPILOGO ATTENZIONE ${senzaPrenotazione} soggiorni senza prenotazione corrispondente (tenuti, canale ignoto)`);
-  out(`RIEPILOGO storico: ${u.soggiorni.length} soggiorni (${u.nuovi} nuovi, ${u.aggiornati} aggiornati, ${u.spariti} tolti perch\xE9 spariti da Slope, ${u.scaduti} oltre ${CONSERVAZIONE_MESI} mesi)`);
-  out(`RIEPILOGO ospiti unici: ${ospiti.length}, abituali ${ospiti.filter((o) => o.abituale).length} \xB7 ${perCasa}`);
-  out(`RIEPILOGO lingue: ${topLingue}`);
+  out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
+  riepilogoOspiti(u.soggiorni, run.day);
   out(`RIEPILOGO La Scatola ${envelope.freshness}${envelope.scatola_updated_at ? `, aggiornata alle ${envelope.scatola_updated_at}` : ""} \xB7 chiamate lette ${calls.length}`);
+  out(`PRONTO ${FILE} scritto e verificato`);
+}
+async function importa(args) {
+  const ci = args.indexOf("--casa");
+  const casaKey = ci >= 0 ? args[ci + 1] : null;
+  const pos = args.filter((a, i) => !a.startsWith("--") && !(ci >= 0 && i === ci + 1));
+  const [file, password] = pos;
+  if (!file || !password) fail(`uso: ${CMD} importa <esportazione.xlsx|.csv> "<PASSWORD>" [--casa acadia|hartmann|saslong]`);
+  if (!existsSync2(file)) fail(`file non trovato: ${file}`);
+  const casa = casaKey ? CASE.find((c) => c.key === casaKey.toLowerCase())?.id ?? fail(`casa sconosciuta: ${casaKey} (acadia, hartmann o saslong)`) : null;
+  const storico = await leggiStorico(password);
+  if (!storico) fail(`${FILE} non c'\xE8: fai prima un aggiornamento da La Scatola, poi importa.`);
+  const day2 = romeDay();
+  const righe = leggiTabella(file);
+  const imp = await importaRighe(righe, day2, storico.archivio.finestraDal, casa).catch((e2) => fail(e2 instanceof Error ? e2.message : String(e2)));
+  const nomiCol = Object.entries(imp.colonne).map(([k, i]) => `${k}=${String.fromCharCode(65 + i)}`).join(" ");
+  out(`RIEPILOGO colonne riconosciute: ${nomiCol}`);
+  if (imp.colonne.casa === void 0 && !casa) fail("nessuna colonna \xABStruttura/Hotel\xBB nel file: indica la casa con --casa acadia|hartmann|saslong.");
+  if (!imp.soggiorni.length) fail(`nessun soggiorno importabile (illeggibili ${imp.illeggibili}, gi\xE0 coperti da La Scatola ${imp.giaInScatola}). Niente da pubblicare.`);
+  const u = unisci(storico.archivio.soggiorni, imp.soggiorni, () => false, day2);
+  const archivio = { ...storico.archivio, day: day2, soggiorni: u.soggiorni };
+  await scrivi(archivio, password, { status: storico.env.freshness, updatedAt: storico.env.scatola_updated_at });
+  const e = imp.esclusi;
+  out(`RIEPILOGO righe importate: ${imp.soggiorni.length} \xB7 scartate: ${e.portale} email dei portali, ${e.nonValida} senza email valida, ${e.interna} interne, ${e.minori} minori, ${imp.illeggibili} senza data o casa leggibile, ${imp.giaInScatola} gi\xE0 coperte da La Scatola`);
+  out(riepilogoStorico(u, u.soggiorni.filter((s) => s.origine === "import").length));
+  riepilogoOspiti(u.soggiorni, day2);
   out(`PRONTO ${FILE} scritto e verificato`);
 }
 async function verify(args) {
   const password = args[args.length - 1];
   const file = args.length > 1 ? args[0] : FILE;
   if (!password) fail(`uso: ${CMD} verify "<PASSWORD>"`);
-  const env = JSON.parse(readFileSync2(file, "utf8"));
+  const env = JSON.parse(readFileSync3(file, "utf8"));
   if (!isEnvelope(env)) fail(`${file} non \xE8 un file della piattaforma newsletter`);
   if (!envelopeSenzaDatiInChiaro(env)) fail("dati personali fuori dal blocco cifrato");
   const a = await decryptJson(env.enc, password, aadFor(env.day)).catch(() => fail("password errata o file alterato"));
   if (a.format !== 1 || a.day !== env.day || !Array.isArray(a.soggiorni)) fail("contenuto incompleto");
   const ids = /* @__PURE__ */ new Set();
   for (const s of a.soggiorni) {
-    if (!isUuid(s.gsid) || !isUuid(s.rid) || !isUuid(s.pid)) fail("ID di Slope non validi nello storico");
+    const importato = s.origine === "import";
+    if (importato ? !IMPORT_ID.test(s.gsid) || s.rid !== null : !isUuid(s.gsid) || !isUuid(s.rid)) fail("ID di Slope non validi nello storico");
+    if (!isUuid(s.pid)) fail("property_id non valido nello storico");
     if (ids.has(s.gsid)) fail("soggiorno doppio nello storico");
     ids.add(s.gsid);
     if (emailEsclusa(s.email)) fail("nello storico c'\xE8 un'email che andava scartata");
   }
   const ospiti = ospitiDa(a.soggiorni, env.day);
-  out(`verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, scritto ${env.generated_at}`);
+  const imp = a.soggiorni.filter((s) => s.origine === "import").length;
+  out(
+    `verifica OK: ${env.day}, ${a.soggiorni.length} soggiorni${imp ? ` (${imp} importati)` : ""}, ${ospiti.length} ospiti unici, ${ospiti.filter((o) => o.abituale).length} abituali, scritto ${env.generated_at}`
+  );
 }
 var [cmd, ...rest] = process.argv.slice(2);
-var job = cmd === "start" ? () => start(rest) : cmd === "next" ? next : cmd === "verify" ? () => verify(rest) : null;
-if (!job) fail('comandi: start "<PASSWORD>" [--primo] \xB7 next \xB7 verify "<PASSWORD>"');
+var job = cmd === "start" ? () => start(rest) : cmd === "next" ? next : cmd === "verify" ? () => verify(rest) : cmd === "importa" ? () => importa(rest) : null;
+if (!job) fail('comandi: start "<PASSWORD>" [--completo] [--primo] \xB7 next \xB7 verify "<PASSWORD>" \xB7 importa <file> "<PASSWORD>" [--casa \u2026]');
 job().catch((e) => fail(e instanceof Error ? e.message : String(e)));
+export {
+  guestArgs,
+  reservationArgs
+};

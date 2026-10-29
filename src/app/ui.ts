@@ -130,7 +130,7 @@ export function mostra(archivio: Archivio, env: Pick<Envelope, "generated_at" | 
 
   const e = archivio.esclusi;
   $("note").textContent =
-    `Esclusi automaticamente nell'ultimo aggiornamento: ${e.portale} email mascherate dei portali (Booking, Expedia…), ${e.nonValida} non valide, ` +
+    `Esclusi automaticamente nell'ultima lettura completa di La Scatola: ${e.portale} email mascherate dei portali (Booking, Expedia…), ${e.nonValida} non valide, ` +
     `${e.interna} interne, ${e.minori} minorenni, ${e.cancellati} da prenotazioni cancellate. ` +
     `I soggiorni restano nello storico per ${archivio.conservazioneMesi} mesi dall'ultima partenza. ` +
     `Le disiscrizioni si gestiscono nello strumento newsletter: reimportando l'elenco, chi si è disiscritto resta escluso.`;

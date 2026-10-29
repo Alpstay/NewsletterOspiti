@@ -35,8 +35,8 @@ export interface Casa {
 export interface Soggiorno {
   /** guest_stay_id di Slope. */
   readonly gsid: string;
-  /** reservation_id di Slope. */
-  readonly rid: string;
+  /** reservation_id di Slope (null per i soggiorni importati da un'esportazione, che non ce l'hanno). */
+  readonly rid: string | null;
   /** property_id di Slope. */
   readonly pid: string;
   readonly nome: string;
@@ -58,8 +58,10 @@ export interface Soggiorno {
   readonly canale: Canale | null;
   /** Giorno dei 18 anni (calcolato dalla data di nascita, che non viene conservata). */
   readonly maggiorenneDal: string | null;
-  /** Ultimo giorno in cui La Scatola riportava questo soggiorno. */
+  /** Ultimo giorno in cui La Scatola riportava questo soggiorno (o giorno dell'importazione). */
   readonly vistoIl: string;
+  /** "import" = da un'esportazione di Slope (gsid «imp-…» generato, mai un ID di Slope); assente = La Scatola. */
+  readonly origine?: "import";
 }
 
 /** Quante righe di La Scatola non sono entrate nello storico, e perché. */

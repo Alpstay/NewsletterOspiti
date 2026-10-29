@@ -12,6 +12,10 @@ scaricare in Excel per la newsletter. Online su https://alpstay.github.io/Newsle
   di Colazioni SAS, DailyList e WelcomeHartmann.
 - **Storico**: La Scatola tiene i dati degli ospiti solo per una finestra mobile; lo storico cifrato li
   conserva per 24 mesi dall'ultima partenza, così gli abituali si riconoscono anche negli anni.
+- **Solo i dati nuovi**: di notte si rileggono soltanto i soggiorni che finiscono dagli ultimi 7 giorni in
+  poi (~4 chiamate); il 1° di ogni mese una lettura completa fa da rete di sicurezza.
+- **Importazione**: lo storico degli anni passati si carica da un'esportazione Excel/CSV di Slope con
+  `node tools/ospiti.mjs importa <file> "<PASSWORD>"` (dettagli in `tools/AGGIORNA.md`).
 - **Pagina**: decifra nel browser; la Content-Security-Policy permette di scaricare dati solo dal
   proprio sito, quindi email e password non possono partire verso altri indirizzi. L'Excel si genera
   in locale.

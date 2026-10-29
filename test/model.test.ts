@@ -84,7 +84,7 @@ ok(errore.includes("reservation_id non valido"), "un ID trascritto male fa falli
 // ── storico ──
 const S = (gsid: string, o: Partial<Soggiorno> = {}): Soggiorno => ({
   gsid,
-  rid: "aaaaaaaa-0000-4000-8000-0000000000" + gsid.slice(-2),
+  rid: "aaaaaaaa-0000-4000-8000-0000000000" + gsid.slice(-2) as string | null,
   pid: ACADIA,
   nome: "Anna",
   cognome: "Huber",
@@ -104,7 +104,7 @@ const vecchio = S("cccccccc-0000-4000-8000-000000000001", { dal: "2026-02-10", a
 const sparito = S("cccccccc-0000-4000-8000-000000000002", { dal: "2026-09-20", al: "2026-09-22", email: "b@example.com" }); // in finestra, non più in Slope: si toglie
 const scaduto = S("cccccccc-0000-4000-8000-000000000003", { dal: "2024-01-10", al: "2024-01-15" }); // oltre 24 mesi
 const aggiornato = S("cccccccc-0000-4000-8000-000000000004", { dal: "2026-10-01", al: "2026-10-03", nome: "Vecchio" });
-const u = unisci([vecchio, sparito, scaduto, aggiornato], [S("cccccccc-0000-4000-8000-000000000004", { dal: "2026-10-01", al: "2026-10-03" }), S("cccccccc-0000-4000-8000-000000000005", { dal: "2026-12-27", al: "2027-01-02" })], "2026-09-06", OGGI);
+const u = unisci([vecchio, sparito, scaduto, aggiornato], [S("cccccccc-0000-4000-8000-000000000004", { dal: "2026-10-01", al: "2026-10-03" }), S("cccccccc-0000-4000-8000-000000000005", { dal: "2026-12-27", al: "2027-01-02" })], (s) => s.dal >= "2026-09-06", OGGI);
 eq(
   u.soggiorni.map((s) => s.gsid.slice(-1)),
   ["1", "4", "5"],

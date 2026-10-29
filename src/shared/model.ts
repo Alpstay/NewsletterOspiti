@@ -204,27 +204,37 @@ export interface Unione {
   readonly soggiorni: Soggiorno[];
   readonly nuovi: number;
   readonly aggiornati: number;
-  /** Soggiorni dentro la finestra di La Scatola che non ci sono più (cancellati, email tolta, …). */
+  /** Soggiorni del periodo letto che La Scatola non ha più (cancellati, email tolta, …). */
   readonly spariti: number;
   /** Soggiorni oltre il periodo di conservazione. */
   readonly scaduti: number;
-  /** Soggiorni dello storico dentro la finestra di La Scatola prima dell'unione. */
+  /** Soggiorni dello storico che ricadevano nel periodo letto, prima dell'unione. */
   readonly precedentiInFinestra: number;
 }
 
+/** ID generato per un soggiorno importato: stabile (reimportare lo stesso file non crea doppioni) e mai confondibile con un ID di Slope. */
+export const IMPORT_ID = /^imp-[0-9a-f]{16}$/;
+
 /**
  * Unisce lo storico precedente con i soggiorni letti oggi.
- * - Dentro la finestra di La Scatola (dal ≥ finestraDal) vale La Scatola: un soggiorno sparito si toglie.
- * - Prima della finestra La Scatola non ha più i dati: vale lo storico, ed è proprio lo scopo dello storico.
+ * - Nel periodo letto (`copre`) vale La Scatola: un soggiorno sparito si toglie.
+ * - Fuori dal periodo letto vale lo storico, ed è proprio lo scopo dello storico.
+ * - I soggiorni importati da un'esportazione non si tolgono mai per «sparizione».
  * - Oltre il periodo di conservazione un soggiorno si cancella comunque.
  */
-export function unisci(prev: readonly Soggiorno[], oggiLetti: readonly Soggiorno[], finestraDal: string, oggi: string, mesi = CONSERVAZIONE_MESI): Unione {
+export function unisci(
+  prev: readonly Soggiorno[],
+  oggiLetti: readonly Soggiorno[],
+  copre: (s: Soggiorno) => boolean,
+  oggi: string,
+  mesi = CONSERVAZIONE_MESI,
+): Unione {
   const fresh = new Map(oggiLetti.map((s) => [s.gsid, s]));
   const out = new Map<string, Soggiorno>();
   let spariti = 0;
   let precedentiInFinestra = 0;
   for (const s of prev) {
-    if (s.dal >= finestraDal) {
+    if (s.origine !== "import" && copre(s)) {
       precedentiInFinestra++;
       if (!fresh.has(s.gsid)) {
         spariti++;
